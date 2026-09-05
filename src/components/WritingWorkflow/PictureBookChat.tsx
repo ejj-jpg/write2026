@@ -20,6 +20,7 @@ import { requestStoryIdeas } from '../../lib/aiService';
 
 interface PictureBookChatProps {
   student: Student;
+  topicTitle?: string;
   initialFramework?: StoryFramework;
   onFrameworkUpdate: (framework: StoryFramework) => void;
   onProceedToNextStep: () => void;
@@ -113,6 +114,7 @@ const STAGES: StageMeta[] = [
 
 export const PictureBookChat: React.FC<PictureBookChatProps> = ({
   student,
+  topicTitle,
   initialFramework,
   onFrameworkUpdate,
   onProceedToNextStep
@@ -201,7 +203,7 @@ export const PictureBookChat: React.FC<PictureBookChatProps> = ({
         onFrameworkUpdate(currentContext);
       }
 
-      const generated = await requestStoryIdeas(currentStage.key, currentContext, student.grade);
+      const generated = await requestStoryIdeas(currentStage.key, currentContext, student.grade, topicTitle);
       setIdeas(generated);
     } catch (err) {
       console.warn('AI idea error:', err);
@@ -422,19 +424,37 @@ export const PictureBookChat: React.FC<PictureBookChatProps> = ({
                 </div>
 
                 {/* Show active first-sentence reflection when in subsequent stages */}
-                {currentStage.key !== 'firstSentence' && framework.firstSentence && (
-                  <div className="px-3 py-2 bg-[#E2F0EA] border border-[#C2E4D5] rounded-xl flex items-center gap-2 text-xs text-[#2D2A26]">
-                    <span className="font-extrabold text-[#5A8F7B] shrink-0">🎯 내 첫 문장 맞춤:</span>
-                    <span className="truncate italic font-medium text-[#4A443F]">
-                      "{framework.firstSentence}"
-                    </span>
-                  </div>
+                {currentStage.key !== 'firstSentence' && (
+                  framework.firstSentence?.trim() ? (
+                    <div className="px-3.5 py-2.5 bg-[#E2F0EA] border border-[#C2E4D5] rounded-xl flex items-center gap-2 text-xs text-[#2D2A26]">
+                      <span className="font-extrabold text-[#5A8F7B] shrink-0">🎯 내 첫 문장 중심 맞춤:</span>
+                      <span className="truncate italic font-medium text-[#4A443F]">
+                        "{framework.firstSentence}"
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="px-3.5 py-2.5 bg-[#FFF4E6] border border-[#FED7AA] rounded-xl flex items-center justify-between text-xs text-[#2D2A26] gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-extrabold text-[#C05621] shrink-0">💡 팁:</span>
+                        <span className="text-[#7C2D12] font-medium text-[11px]">
+                          첫 문장을 먼저 쓰면, 그 첫 문장의 세계관과 인물에 꼭 맞춘 아이디어가 추천돼요!
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleStageSelect(0)}
+                        className="px-2.5 py-1 bg-[#C05621] hover:bg-[#9C4215] text-white text-[10px] font-bold rounded-lg shrink-0 transition-colors"
+                      >
+                        첫 문장 쓰러 가기
+                      </button>
+                    </div>
+                  )
                 )}
 
                 {loadingIdeas ? (
                   <div className="py-6 text-center text-xs text-[#8C8379] space-y-2">
                     <RefreshCw className="w-5 h-5 mx-auto animate-spin text-[#5A8F7B]" />
-                    <p>지금까지의 이야기 흐름에 딱 맞는 멋진 아이디어를 생각 중이에요...</p>
+                    <p>학생의 첫 문장과 이야기 흐름에 꼭 맞춘 독창적인 아이디어를 고민 중이에요...</p>
                   </div>
                 ) : (
                   <div className="grid sm:grid-cols-3 gap-2.5">
@@ -442,18 +462,28 @@ export const PictureBookChat: React.FC<PictureBookChatProps> = ({
                       <div
                         key={idea.id || i}
                         onClick={() => handleSelectIdea(idea)}
-                        className="bg-white p-3 rounded-xl border border-[#EADDCA] hover:border-[#5A8F7B] hover:shadow-xs cursor-pointer transition-all flex flex-col justify-between group text-left"
+                        className="bg-white p-3.5 rounded-2xl border-2 border-[#EADDCA] hover:border-[#5A8F7B] hover:shadow-sm cursor-pointer transition-all flex flex-col justify-between group text-left"
                       >
-                        <div className="space-y-1 mb-2">
-                          <span className="text-[10px] font-extrabold text-[#5A8F7B] block">
-                            아이디어 {i + 1}. {idea.title}
-                          </span>
-                          <p className="text-[11px] text-[#4A443F] line-clamp-2 leading-relaxed">
+                        <div className="space-y-1.5 mb-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-extrabold text-[#5A8F7B]">
+                              아이디어 {i + 1}
+                            </span>
+                            <span className="text-[10px] font-bold text-[#A67C52] bg-[#FDF8F3] px-2 py-0.5 rounded-md border border-[#F2EDE4]">
+                              {idea.title}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[#6B635B] leading-relaxed line-clamp-2">
                             {idea.description}
                           </p>
+                          {idea.preview && (
+                            <div className="p-2 bg-[#F8F5F0] rounded-xl border border-[#EADDCA] text-[11px] text-[#2D2A26] font-medium leading-relaxed italic">
+                              "{idea.preview}"
+                            </div>
+                          )}
                         </div>
                         <div className="pt-2 border-t border-[#F2EDE4] flex items-center justify-between">
-                          <span className="text-[10px] font-bold text-[#A67C52] group-hover:text-[#5A8F7B]">
+                          <span className="text-[10px] font-bold text-[#A67C52] group-hover:text-[#5A8F7B] transition-colors">
                             이 아이디어 선택
                           </span>
                           <ChevronRight className="w-3.5 h-3.5 text-[#8C8379] group-hover:translate-x-0.5 transition-transform" />
@@ -539,7 +569,7 @@ export const PictureBookChat: React.FC<PictureBookChatProps> = ({
                 return (
                   <div
                     key={s.key}
-                    onClick={() => setCurrentStageIdx(idx)}
+                    onClick={() => handleStageSelect(idx)}
                     className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
                       isSelected
                         ? 'border-[#5A8F7B] bg-[#F0F7F4] shadow-xs'

@@ -12,7 +12,13 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
-const MODEL_NAME = 'gemini-3.6-flash';
+
+// High-speed, high-availability Gemini models with automatic failover
+const CANDIDATE_MODELS = [
+  'gemini-3.1-flash-lite',
+  'gemini-flash-latest',
+  'gemini-3.8-flash'
+];
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -25,27 +31,111 @@ function getGeminiClient() {
   return new GoogleGenAI({ apiKey });
 }
 
+// Helper to safely parse JSON from model responses
+function parseJsonSafely(text: string, fallback: any = {}) {
+  if (!text || typeof text !== 'string') return fallback;
+  try {
+    const cleaned = text.trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+    return JSON.parse(cleaned);
+  } catch (e) {
+    const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch (innerErr) {
+        console.warn('Regex JSON parse fallback failed:', innerErr);
+      }
+    }
+    return fallback;
+  }
+}
+
+// Universal robust generateContent with multi-model fallback
+async function generateContentWithFallback(
+  contents: string,
+  config?: any
+): Promise<{ text: string; model: string }> {
+  const ai = getGeminiClient();
+  let lastError: any = null;
+
+  for (const model of CANDIDATE_MODELS) {
+    try {
+      console.log(`[Gemini] Trying model: ${model}`);
+      const startTime = Date.now();
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          ...config,
+          responseMimeType: config?.responseMimeType || 'application/json'
+        }
+      });
+      console.log(`[Gemini] Model ${model} responded in ${Date.now() - startTime}ms`);
+
+      if (response && response.text) {
+        return { text: response.text, model };
+      }
+    } catch (err: any) {
+      console.warn(`[Gemini] Model ${model} failed (${err?.status || err?.message}), trying next fallback...`);
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error('모든 Gemini AI 모델 호출에 실패했습니다.');
+}
+
+// Fallback feedback generator if all external network calls fail
+function generateFallbackFeedback(
+  draft: string,
+  planning: any,
+  grade: number = 4
+) {
+  const wordCount = draft.trim().split(/\s+/).length;
+  const sentenceCount = (draft.match(/[.!?]/g) || []).length || 1;
+  const title = planning?.title || '나의 이야기';
+
+  return {
+    strengths: [
+      `‘${title}’의 내용을 ${wordCount}개의 낱말과 ${sentenceCount}개 이상의 문장으로 풍부하고 솔직하게 표현했어요.`,
+      `초고의 첫 시작부터 학생만의 솔직한 생각과 재미있는 상상이 돋보여요.`
+    ],
+    improvements: [
+      `인물들의 생생한 대화나 그때 느꼈던 마음의 소리를 ‘큰따옴표’로 1~2문장 더 적어보면 훨씬 흥미진진해질 거예요.`,
+      `장면이 바뀔 때 어떤 소리나 표정이었는지 흉내말(의성어·의태어)을 덧붙여 보세요.`
+    ],
+    reasoning: `초등학교 ${grade}학년 어린이로서 정성을 다해 한 편의 초고를 끝까지 써낸 점이 정말 대단합니다. 스스로 다듬어볼 수 있는 좋은 기초가 마련되었습니다.`,
+    topPriority: `주인공이 가장 기억에 남거나 놀랐던 순간의 생각과 대화를 한 문장 더 자세히 덧붙여 보세요!`,
+    selfReflectQuestions: [
+      `이 장면에서 주인공의 마음과 표정은 어땠을까요?`,
+      `이야기 속 친구에게 하고 싶은 말이 있다면 무엇인가요?`
+    ]
+  };
+}
+
 // 1. Health check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: Date.now(),
-    hasGeminiKey: !!process.env.GEMINI_API_KEY
+    hasGeminiKey: !!process.env.GEMINI_API_KEY,
+    candidateModels: CANDIDATE_MODELS
   });
 });
 
 // 2. Gemini connection test
 app.post('/api/gemini/test', async (req, res) => {
   try {
-    const ai = getGeminiClient();
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: '초등학생을 위한 따뜻한 한 줄 환영 인사를 30자 이내로 써주세요.',
-    });
+    const result = await generateContentWithFallback(
+      '초등학생을 위한 따뜻한 한 줄 환영 인사를 30자 이내로 써주세요.',
+      { responseMimeType: 'text/plain' }
+    );
     res.json({
       success: true,
-      message: response.text?.trim() || 'Gemini 연결 성공!',
-      model: MODEL_NAME
+      message: result.text.trim() || 'Gemini 연결 성공!',
+      model: result.model
     });
   } catch (err: any) {
     console.error('Gemini test error:', err);
@@ -57,10 +147,176 @@ app.post('/api/gemini/test', async (req, res) => {
 });
 
 // 2-1. Picture Book Story Ideas Generation (학생의 첫 문장 및 이전 단계 설정에 맞춘 3가지 아이디어 예시 생성)
+// Dynamic fallback for story ideas tailored to student's first sentence
+function generateDynamicStoryIdeas(
+  stage: string,
+  currentData: Record<string, any> = {},
+  grade: number = 4
+): Array<{ id: string; title: string; description: string; preview: string }> {
+  const fs = (currentData.firstSentence || '').trim();
+  const shortFs = fs.length > 25 ? `${fs.slice(0, 25)}...` : fs;
+
+  if (fs) {
+    if (stage === 'character') {
+      return [
+        {
+          id: 'dyn_ch_1',
+          title: '첫 문장의 주인공',
+          description: `"${shortFs}"의 사건을 직접 마주한 용기 있고 호기심 많은 주인공이에요.`,
+          preview: `그 순간 자리에 서 있던 주인공은 평소 호기심이 많고 무슨 일이든 끝까지 파헤치는 특별한 성격을 지니고 있었다.`
+        },
+        {
+          id: 'dyn_ch_2',
+          title: '비밀을 품은 친구',
+          description: `첫 문장의 상황에 대해 남모를 단서를 품고 있는 신비로운 캐릭터예요.`,
+          preview: `겉모습은 평범해 보이지만 첫 문장에서 벌어진 일의 비밀을 가슴속에 간직한 채 조용히 관찰하던 주인공이었다.`
+        },
+        {
+          id: 'dyn_ch_3',
+          title: '엉뚱한 해결사',
+          description: `기발한 상상력으로 상황을 흥미진진하게 이끌어갈 유쾌한 주인공이에요.`,
+          preview: `엉뚱한 생각으로 주변을 놀라게 하지만 위기의 순간마다 번뜩이는 아이디어를 내는 매력적인 주인공이었다.`
+        }
+      ];
+    }
+    if (stage === 'goal') {
+      return [
+        {
+          id: 'dyn_gl_1',
+          title: '진실 밝히기',
+          description: `"${shortFs}"에서 벌어진 신기한 일의 원인을 알아내려는 목표예요.`,
+          preview: `방금 일어난 기묘한 사건의 비밀을 풀고 잃어버린 소중한 것을 제자리로 되돌려놓는 것이었다.`
+        },
+        {
+          id: 'dyn_gl_2',
+          title: '모험과 탐험',
+          description: `첫 문장의 사건을 계기로 미지의 세계로 당당하게 나아가는 목표예요.`,
+          preview: `두려움을 이겨내고 한 번도 가보지 못한 새로운 세상으로 나아가 꿈꾸던 소망을 이루는 것이었다.`
+        },
+        {
+          id: 'dyn_gl_3',
+          title: '친구와의 약속',
+          description: `첫 문장의 상황에서 위험에 빠진 존재를 구하거나 약속을 지키는 목표예요.`,
+          preview: `소중한 친구를 안전하게 구하고 가슴속에 품은 따뜻한 약속을 끝까지 지켜내는 것이었다.`
+        }
+      ];
+    }
+    if (stage === 'obstacle') {
+      return [
+        {
+          id: 'dyn_ob_1',
+          title: '갑작스러운 돌발 상황',
+          description: `"${shortFs}" 이후 예상치 못한 장애물이 나타나 앞을 가로막는 상황이에요.`,
+          preview: `목표를 향해 나아가려는 순간, 거센 돌풍과 함께 아무도 예상하지 못했던 거대한 장벽이 눈앞을 가로막았다.`
+        },
+        {
+          id: 'dyn_ob_2',
+          title: '방해하는 훼방꾼',
+          description: `첫 문장의 비밀을 빼앗으려는 짓궂은 상대가 나타나는 전개예요.`,
+          preview: `비밀을 호시탐탐 노리던 짓궂은 방해꾼이 나타나 중요한 단서를 낚아채 달아나버렸다.`
+        },
+        {
+          id: 'dyn_ob_3',
+          title: '마음의 두려움과 오해',
+          description: `스스로의 두려움이나 친구와의 오해로 갈등이 깊어지는 상황이에요.`,
+          preview: `시간이 촉박해질수록 자꾸만 실수가 이어졌고, 친구와의 사소한 오해까지 겹쳐 마음이 무거워졌다.`
+        }
+      ];
+    }
+    if (stage === 'helper') {
+      return [
+        {
+          id: 'dyn_hp_1',
+          title: '믿음직한 조력자',
+          description: `위기의 순간 지혜로운 조언을 건네는 든든한 친구예요.`,
+          preview: `위기의 순간 어디선가 나타난 작은 친구가 따뜻한 손을 내밀며 결정적인 힌트를 속삭여주었다.`
+        },
+        {
+          id: 'dyn_hp_2',
+          title: '신비한 마법 도구',
+          description: `첫 문장의 상황을 뒤집을 수 있는 특별한 물건이에요.`,
+          preview: `주머니 깊숙한 곳에서 발견한 낡은 나침반이 반짝이는 빛을 내뿜으며 올바른 방향을 가리키기 시작했다.`
+        },
+        {
+          id: 'dyn_hp_3',
+          title: '숨겨진 나의 용기',
+          description: `어려움 속에서 스스로 깨달은 내면의 힘이에요.`,
+          preview: `도망치고 싶던 순간, 포기하지 않겠다고 다짐하자 마음 깊은 곳에서 뜨거운 용기가 솟아올랐다.`
+        }
+      ];
+    }
+    if (stage === 'resolution') {
+      return [
+        {
+          id: 'dyn_rs_1',
+          title: '기지와 협동으로 해결',
+          description: `친구와 힘을 합쳐 번뜩이는 아이디어로 시련을 극복하는 장면이에요.`,
+          preview: `친구와 눈빛을 교환한 주인공은 기발한 작전을 펼쳐 방해물을 슬기롭게 뛰어넘었다.`
+        },
+        {
+          id: 'dyn_rs_2',
+          title: '진심 어린 설득',
+          description: `싸우지 않고 진심을 전해 갈등을 눈 녹듯 푸는 장면이에요.`,
+          preview: `솔직한 마음을 담은 따뜻한 한마디를 건네자, 굳게 닫혀 있던 상대방의 마음이 사르르 열렸다.`
+        },
+        {
+          id: 'dyn_rs_3',
+          title: '용기 있는 도전',
+          description: `두려움을 딛고 온 힘을 다해 문제를 해결하는 통쾌한 장면이에요.`,
+          preview: `심호흡을 한 번 크게 내쉬고 온 힘을 다해 손을 뻗어 마침내 엉킨 문제를 말끔히 풀어냈다.`
+        }
+      ];
+    }
+    if (stage === 'ending') {
+      return [
+        {
+          id: 'dyn_ed_1',
+          title: '따뜻한 감동의 마무리',
+          description: `모험이 끝나고 마음이 한 뼘 더 자란 훈훈한 결말이에요.`,
+          preview: `모든 모험이 끝나고 일상으로 돌아왔지만, 주인공의 가슴속에는 잊을 수 없는 소중한 추억과 우정이 영원히 남게 되었다.`
+        },
+        {
+          id: 'dyn_ed_2',
+          title: '새로운 모험의 여운',
+          description: `또 다른 신비로운 모험을 예고하며 미소 짓는 결말이에요.`,
+          preview: `창밖의 노을을 바라보며 미소를 지었다. 내일은 또 어떤 흥미진진한 비밀이 나를 기다리고 있을까?`
+        },
+        {
+          id: 'dyn_ed_3',
+          title: '유쾌하고 흐뭇한 반전',
+          description: `친구들과 함께 활짝 웃으며 행복하게 끝나는 결말이에요.`,
+          preview: `서로의 얼굴을 마주 보며 까르르 웃음을 터뜨렸다. 오늘은 우리 모두에게 평생 잊지 못할 가장 특별한 날이었다.`
+        }
+      ];
+    }
+  }
+
+  return [
+    {
+      id: 'open_1',
+      title: '신비한 일상 판타지',
+      description: '평범한 하루 속에 마법 같은 일이 벌어지는 호기심 가득한 오프닝이에요.',
+      preview: '비가 그친 오후, 낡은 책상 서랍 구석에서 은은한 빛과 함께 작은 문이 딸깍 열렸다.'
+    },
+    {
+      id: 'open_2',
+      title: '유쾌하고 엉뚱한 반전',
+      description: '예상치 못한 사건으로 웃음과 재미를 선사하는 오프닝이에요.',
+      preview: '아침에 일어났더니, 침대 머리맡에 놓인 내 파란색 운동화가 사람처럼 하품을 하고 있었다.'
+    },
+    {
+      id: 'open_3',
+      title: '두근두근 모험의 시작',
+      description: '비밀 통로나 신비한 메시지를 발견하며 시작되는 오프닝이에요.',
+      preview: '학교 운동장 시계탑 뒤편에서 지금까지 아무도 보지 못했던 은빛 비밀 계단이 모습을 드러냈다.'
+    }
+  ];
+}
+
+// 2-1. Picture Book Story Ideas Generation (학생의 첫 문장 및 이전 단계 설정에 맞춘 3가지 아이디어 예시 생성)
 app.post('/api/gemini/story-ideas', async (req, res) => {
   try {
-    const { stage, currentData = {}, grade = 6 } = req.body;
-    const ai = getGeminiClient();
+    const { stage, currentData = {}, grade = 6, topicTitle } = req.body;
 
     const stageNames: Record<string, string> = {
       firstSentence: '그림책의 첫 문장 (독자의 호기심을 확 사로잡는 매력적인 첫 문장)',
@@ -73,34 +329,83 @@ app.post('/api/gemini/story-ideas', async (req, res) => {
     };
 
     const targetStageName = stageNames[stage] || stage;
-
-    let contextDesc = '';
-    if (currentData.firstSentence) contextDesc += `\n- [학생이 직접 쓴 첫 문장]: "${currentData.firstSentence}"`;
-    if (currentData.character) contextDesc += `\n- 1. 주인공: "${currentData.character}"`;
-    if (currentData.goal) contextDesc += `\n- 2. 하고 싶은 일: "${currentData.goal}"`;
-    if (currentData.obstacle) contextDesc += `\n- 3. 주인공을 방해하는 것: "${currentData.obstacle}"`;
-    if (currentData.helper) contextDesc += `\n- 4. 주인공을 돕는 것: "${currentData.helper}"`;
-    if (currentData.resolution) contextDesc += `\n- 5. 해결과정: "${currentData.resolution}"`;
-    if (currentData.ending) contextDesc += `\n- 6. 결말: "${currentData.ending}"`;
-
     const studentFirstSentence = currentData.firstSentence ? currentData.firstSentence.trim() : '';
 
-    const prompt = `당신은 초등학교 그림책 창작 전문 동화 작가이자 국어 지도 교사입니다.
+    let prompt = '';
+
+    if (stage === 'firstSentence') {
+      prompt = `당신은 대한민국 최고의 초등학교 그림책 및 동화 창작 전문 작가이자 국어 지도 교사입니다.
+초등학교 ${grade}학년 학생이 그림책을 쓰기 위해 '이야기를 여는 첫 문장' 아이디어를 얻고자 합니다.
+${topicTitle ? `[학생이 고른 주제]: ${topicTitle}` : ''}
+${studentFirstSentence ? `[학생의 기존 생각/단어]: "${studentFirstSentence}"` : ''}
+
+★★ [절대 원칙 - 천편일률적 클리셰 금지 및 다양성 극대화] ★★
+1. **절대로 모든 학생에게 동일하거나 뻔한 동화 클리셰(흔한 다람쥐 도토리, 숲속 요정, 뻔한 먹구름 등)를 반복해서 추천하지 마세요.**
+2. 독자(친구들, 부모님)의 눈을 단숨에 사로잡고 "어? 다음엔 무슨 일이 일어나지?" 하고 호기심이 폭발하는 참신하고 기발한 첫 문장 3가지를 만들어주세요.
+3. 3가지 첫 문장은 서로 완전히 다른 장르와 분위기를 띠어야 합니다:
+   - 아이디어 1 (기발한 일상 판타지): 평범한 일상(교실, 방, 운동장, 냉장고, 가방, 빗방울 등)에 갑자기 마법 같은 일이 벌어지는 신비로운 오프닝
+   - 아이디어 2 (유쾌하고 엉뚱한 유머/반전): 예상치 못한 인물이나 사물의 행동, 엉뚱한 상황으로 웃음을 터뜨리는 오프닝
+   - 아이디어 3 (두근두근 모험/미스터리/SF): 비밀 통로, 시간 여행, 우주, 신비한 소리나 암호 등 가슴 뛰는 모험의 오프닝
+4. 초등학교 ${grade}학년 어린이 눈높이에 맞추어 이해하기 쉽고 바로 상상이 펼쳐지는 문장이어야 합니다.
+
+반드시 다음 JSON 형식으로만 응답해 주세요 (코드블록 마크다운 제외):
+{
+  "stage": "firstSentence",
+  "suggestions": [
+    {
+      "id": "idea_1",
+      "title": "호기심을 끄는 제목 (12자 이내)",
+      "description": "이 첫 문장이 왜 매력적인지 아이에게 설명 (친절한 해요체, 1~2문장)",
+      "preview": "학생이 그대로 선택하거나 조금만 바꿔 쓸 수 있는 완성도 높은 첫 문장"
+    },
+    {
+      "id": "idea_2",
+      "title": "호기심을 끄는 제목 (12자 이내)",
+      "description": "이 첫 문장이 왜 매력적인지 아이에게 설명 (친절한 해요체, 1~2문장)",
+      "preview": "학생이 그대로 선택하거나 조금만 바꿔 쓸 수 있는 완성도 높은 첫 문장"
+    },
+    {
+      "id": "idea_3",
+      "title": "호기심을 끄는 제목 (12자 이내)",
+      "description": "이 첫 문장이 왜 매력적인지 아이에게 설명 (친절한 해요체, 1~2문장)",
+      "preview": "학생이 그대로 선택하거나 조금만 바꿔 쓸 수 있는 완성도 높은 첫 문장"
+    }
+  ]
+}`;
+    } else {
+      let contextDesc = '';
+      if (currentData.firstSentence) contextDesc += `\n- ★ [학생이 직접 쓴 첫 문장 - 핵심 세계관 중심축]: "${currentData.firstSentence}"`;
+      if (currentData.character) contextDesc += `\n- 1. 주인공: "${currentData.character}"`;
+      if (currentData.goal) contextDesc += `\n- 2. 하고 싶은 일(목표): "${currentData.goal}"`;
+      if (currentData.obstacle) contextDesc += `\n- 3. 주인공을 방해하는 것(시련): "${currentData.obstacle}"`;
+      if (currentData.helper) contextDesc += `\n- 4. 주인공을 돕는 것(조력자/도구): "${currentData.helper}"`;
+      if (currentData.resolution) contextDesc += `\n- 5. 해결과정(위기 극복): "${currentData.resolution}"`;
+      if (currentData.ending) contextDesc += `\n- 6. 결말: "${currentData.ending}"`;
+
+      prompt = `당신은 초등학교 그림책 창작 전문 동화 작가이자 국어 지도 교사입니다.
 초등학교 ${grade}학년 학생이 자신의 그림책을 만들기 위해 이야기 씨앗을 심고 있습니다.
 
 지금 작성할 단계: [${targetStageName}]
 
 [현재까지 학생이 확정한 이야기 내용]:
-${contextDesc || '(아직 앞 단계 내용이 없습니다. 아이들이 호기심을 가질 만한 멋진 아이디어를 제안해 주세요.)'}
+${contextDesc || '(아직 앞 단계 내용이 없습니다.)'}
 
-★★ [가장 중요한 핵심 지침] ★★
-1. 학생이 작성한 첫 문장("${studentFirstSentence || '없음'}")을 반드시 깊이 있게 분석하세요!
-2. **절대로 모든 학생에게 천편일률적인 뻔한 동화 클리셰(다람쥐 도토리, 숲속 요정, 흔한 먹구름 등)를 반복해서 추천하지 마세요.**
-3. 반드시 학생이 작성한 [첫 문장]의 분위기, 등장인물/동물/사물/장소/사건(예: 바다, 우주, 학교, 마법, 로봇, 시간 여행, 비밀 등)과 긴밀하고 필연적으로 이어지는 창의적인 [${targetStageName}] 아이디어 3가지를 제안해야 합니다.
-4. 3가지 아이디어는 각각 서로 다른 흥미로운 전개 방향(예: 신비로운 판타지/모험, 엉뚱하고 기발한 유머, 따뜻하고 감동적인 성장)을 띠도록 다채롭게 구성해 주세요.
-5. 초등학교 ${grade}학년 어린이가 혼자서도 쉽게 고쳐 쓸 수 있도록 친근하고 명확한 문장으로 작성해주세요.
+★★ [가장 중요한 핵심 중심축 지침] ★★
+1. **[학생의 첫 문장]을 이야기의 절대적인 세계관 중심축(Anchor)으로 삼으세요!**
+   - 학생의 첫 문장: "${studentFirstSentence || '첫 문장 미작성'}"
+   ${studentFirstSentence ? `- 학생이 작성한 고유한 첫 문장의 구체적인 소재, 단어, 공간, 인물 힌트, 분위기, 세계관을 100% 반영해야 합니다.
+   - [적용 예시]:
+     * 첫 문장이 "자전거 페달을 세게 밟았더니 하늘로 날아올랐다"라면: 추천하는 [${targetStageName}]은 반드시 날아다니는 자전거, 하늘 구름길, 바람의 세계관과 필연적으로 맞물려야 합니다.
+     * 첫 문장이 "우리 집 냉장고 문을 열었더니 펭귄이 아이스크림을 먹고 있었다"라면: 추천하는 [${targetStageName}]은 반드시 냉장고 속 얼음 세상, 펭귄, 차가운 비밀과 맞물려야 합니다.
+     * 첫 문장이 "교실 창밖으로 거대한 분홍빛 고래가 헤엄쳐 지나갔다"라면: 추천하는 [${targetStageName}]은 분홍빛 고래, 하늘 바다, 교실 속 비밀과 맞물려야 합니다.` : '- 첫 문장이 아직 없다면, 초등학생들이 흥미를 느낄 만한 다채롭고 참신한 아이디어를 제안해 주세요.'}
+2. **절대로 모든 학생에게 똑같은 동화 클리셰(무관한 아기 다람쥐 도토리, 숲속 요정, 뻔한 먹구름 등)를 반복해서 추천하지 마세요.** 학생의 첫 문장과 무관한 제안은 엄격히 금지됩니다.
+3. 3가지 아이디어는 모두 첫 문장과 긴밀히 연결되되, 전개 방향을 다르게 하세요:
+   - 아이디어 1 (신비로운 모험/판타지): 첫 문장의 비밀을 찾아 떠나는 흥미진진한 전개
+   - 아이디어 2 (기발하고 엉뚱한 유머/반전): 첫 문장의 상황에서 터져 나오는 유쾌한 소동과 반전
+   - 아이디어 3 (따뜻한 감동/우정/성장): 첫 문장의 사건이나 인물과 교감하며 성장하는 포근한 전개
+4. 각 제안의 'preview'는 초등학교 ${grade}학년 어린이가 그대로 선택하거나 자신의 생각대로 쉽게 수정할 수 있는 완성도 높은 자연스러운 구체적 문장이어야 합니다.
 
-반드시 다음 JSON 형식으로만 응답해 주세요 (코드블록 백틱 없이 순수 JSON 문자열만 출력):
+반드시 다음 JSON 형식으로만 응답해 주세요 (코드블록 마크다운 제외):
 {
   "stage": "${stage}",
   "suggestions": [
@@ -108,37 +413,49 @@ ${contextDesc || '(아직 앞 단계 내용이 없습니다. 아이들이 호기
       "id": "idea_1",
       "title": "첫 문장에 맞춘 매력적인 제목 (12자 이내)",
       "description": "첫 문장의 상황과 연결되는 이유 설명 (친절한 해요체, 1~2문장)",
-      "preview": "학생이 그대로 선택하거나 자신의 생각에 맞춰 조금만 고쳐 쓸 수 있는 완성도 높은 구체적 문장"
+      "preview": "학생이 그대로 선택하거나 조금만 고쳐 쓸 수 있는 완성도 높은 구체적 문장"
     },
     {
       "id": "idea_2",
       "title": "첫 문장에 맞춘 매력적인 제목 (12자 이내)",
       "description": "첫 문장의 상황과 연결되는 이유 설명 (친절한 해요체, 1~2문장)",
-      "preview": "학생이 그대로 선택하거나 자신의 생각에 맞춰 조금만 고쳐 쓸 수 있는 완성도 높은 구체적 문장"
+      "preview": "학생이 그대로 선택하거나 조금만 고쳐 쓸 수 있는 완성도 높은 구체적 문장"
     },
     {
       "id": "idea_3",
       "title": "첫 문장에 맞춘 매력적인 제목 (12자 이내)",
       "description": "첫 문장의 상황과 연결되는 이유 설명 (친절한 해요체, 1~2문장)",
-      "preview": "학생이 그대로 선택하거나 자신의 생각에 맞춰 조금만 고쳐 쓸 수 있는 완성도 높은 구체적 문장"
+      "preview": "학생이 그대로 선택하거나 조금만 고쳐 쓸 수 있는 완성도 높은 구체적 문장"
     }
   ]
 }`;
+    }
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
+    try {
+      const response = await generateContentWithFallback(prompt, {
+        temperature: 0.95,
+        topP: 0.95
+      });
+      const parsed = parseJsonSafely(response.text, {});
+      if (Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0) {
+        return res.json({
+          success: true,
+          stage,
+          suggestions: parsed.suggestions,
+          model: response.model
+        });
       }
-    });
+    } catch (apiErr: any) {
+      console.warn('Gemini story ideas generation failed, generating dynamic smart fallback:', apiErr?.message);
+    }
 
-    const responseText = response.text || '{}';
-    const parsed = JSON.parse(responseText.trim());
+    // Dynamic smart fallback tailored to student's firstSentence (NEVER static generic ideas!)
+    const fallbackSuggestions = generateDynamicStoryIdeas(stage, currentData, grade);
     res.json({
       success: true,
       stage,
-      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : []
+      suggestions: fallbackSuggestions,
+      isFallback: true
     });
   } catch (err: any) {
     console.error('Story ideas gen error:', err);
@@ -153,7 +470,6 @@ ${contextDesc || '(아직 앞 단계 내용이 없습니다. 아이들이 호기
 app.post('/api/gemini/outline-examples', async (req, res) => {
   try {
     const { storyFramework = {}, grade = 6 } = req.body;
-    const ai = getGeminiClient();
 
     let contextDesc = '';
     if (storyFramework.firstSentence) contextDesc += `\n- 첫 문장: "${storyFramework.firstSentence}"`;
@@ -187,16 +503,8 @@ ${contextDesc || '(아직 구체적인 씨앗이 적히지 않았습니다. 학�
   "resolution": "결말 1문장 예시 (마침표로 끝나는 정확히 1문장)"
 }`;
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
-      }
-    });
-
-    const responseText = response.text || '{}';
-    const parsed = JSON.parse(responseText.trim());
+    const response = await generateContentWithFallback(prompt);
+    const parsed = parseJsonSafely(response.text, {});
     res.json({
       success: true,
       examples: {
@@ -219,7 +527,6 @@ ${contextDesc || '(아직 구체적인 씨앗이 적히지 않았습니다. 학�
 app.post('/api/gemini/topics', async (req, res) => {
   try {
     const { grade = 4, category = '자유 글쓰기', keywords = '' } = req.body;
-    const ai = getGeminiClient();
 
     const prompt = `당신은 초등학교 국어 글쓰기 지도 전문 교사입니다.
 초등학교 ${grade}학년 학생 수준에 딱 맞고 흥미를 불러일으킬 수 있는 재미있고 의미 있는 글쓰기 주제 4개를 추천해주세요.
@@ -241,17 +548,9 @@ app.post('/api/gemini/topics', async (req, res) => {
   }
 ]`;
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
-      }
-    });
-
-    const responseText = response.text || '[]';
-    const parsed = JSON.parse(responseText.trim());
-    res.json({ success: true, topics: parsed });
+    const response = await generateContentWithFallback(prompt);
+    const parsed = parseJsonSafely(response.text, []);
+    res.json({ success: true, topics: Array.isArray(parsed) ? parsed : [] });
   } catch (err: any) {
     console.error('Topic gen error:', err);
     res.status(500).json({
@@ -271,8 +570,6 @@ app.post('/api/gemini/feedback', async (req, res) => {
     if (!draft || draft.trim().length === 0) {
       return res.status(400).json({ success: false, error: '초고 내용을 입력해주세요.' });
     }
-
-    const ai = getGeminiClient();
 
     const prompt = `당신은 초등학교 글쓰기 전문 선생님입니다.
 초등학교 ${grade}학년 어린이가 쓴 초고를 읽고, 아이의 글쓰기 동기를 북돋우고 구체적으로 발전시킬 수 있는 따뜻하고 건설적인 피드백을 제공해 주세요.
@@ -307,17 +604,32 @@ ${draft}
   ]
 }`;
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
-      }
-    });
+    try {
+      const response = await generateContentWithFallback(prompt);
+      const parsed = parseJsonSafely(response.text, null);
 
-    const responseText = response.text || '{}';
-    const parsed = JSON.parse(responseText.trim());
-    res.json({ success: true, feedback: parsed });
+      if (parsed && typeof parsed === 'object') {
+        const hasStrengths = Array.isArray(parsed.strengths) && parsed.strengths.length > 0;
+        if (hasStrengths) {
+          return res.json({ success: true, feedback: parsed, model: response.model });
+        }
+        // If parsed is valid JSON but strengths is missing or formatted differently
+        return res.json({
+          success: true,
+          feedback: {
+            ...generateFallbackFeedback(draft, planning, grade),
+            ...parsed
+          },
+          model: response.model
+        });
+      }
+    } catch (apiErr: any) {
+      console.warn('Gemini feedback generation failed, generating smart pedagogical fallback:', apiErr?.message);
+    }
+
+    // Smart fallback if all model calls temporarily fail
+    const fallback = generateFallbackFeedback(draft, planning, grade);
+    res.json({ success: true, feedback: fallback, isFallback: true });
   } catch (err: any) {
     console.error('Feedback error:', err);
     res.status(500).json({
@@ -336,8 +648,6 @@ app.post('/api/gemini/proofread', async (req, res) => {
     if (!text || text.trim().length === 0) {
       return res.status(400).json({ success: false, error: '검사할 글을 입력해주세요.' });
     }
-
-    const ai = getGeminiClient();
 
     const prompt = `당신은 초등학교 한국어 맞춤법 및 띄어쓰기 검사기입니다.
 초등학교 ${grade}학년 학생이 작성한 글을 검사해주세요.
@@ -360,8 +670,8 @@ app.post('/api/gemini/proofread', async (req, res) => {
       "id": "item_1",
       "original": "원본 틀린 부분",
       "corrected": "바르게 고친 부분",
-      "type": "맞춤법" | "띄어쓰기" | "문장부호" | "오타",
-      "reason": "초등학생이 쉽게 이해할 수 있는 친절한 설명 (예: '되요'가 아니라 '돼요(되어요)'가 맞아요)"
+      "type": "맞춤법",
+      "reason": "초등학생이 쉽게 이해할 수 있는 친절한 설명"
     }
   ]
 }
@@ -369,21 +679,13 @@ app.post('/api/gemini/proofread', async (req, res) => {
 [학생의 글]:
 ${text}`;
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
-      }
-    });
-
-    const responseText = response.text || '{}';
-    const parsed = JSON.parse(responseText.trim());
+    const response = await generateContentWithFallback(prompt);
+    const parsed = parseJsonSafely(response.text, {});
     res.json({
       success: true,
       beforeProofreading: text,
       afterProofreading: parsed.afterProofreading || text,
-      suggestions: parsed.suggestions || []
+      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : []
     });
   } catch (err: any) {
     console.error('Proofread error:', err);
@@ -395,16 +697,12 @@ ${text}`;
 });
 
 // 6. Teacher Process-focused Assessment Draft (과정중심평가 초안 생성)
-// 규정: 계획, 초고, AI 피드백, 수정 목표, 고쳐쓰기, 자기평가, 맞춤법 수정, 최종 글을 모두 분석하여 평가 초안 생성
-// AI 평가 결과는 반드시 초안으로 저장하고, 교사가 수정·승인한 뒤 최종 평가로 사용
 app.post('/api/gemini/process-assessment', async (req, res) => {
   try {
     const { studentName, grade = 4, record } = req.body;
     if (!record) {
       return res.status(400).json({ success: false, error: '글쓰기 기록이 필요합니다.' });
     }
-
-    const ai = getGeminiClient();
 
     const prompt = `당신은 초등학교 국어과 과정중심평가 전문 교사입니다.
 한 학생이 [계획 → 초고 → AI 피드백 수용 → 수정 목표 수립 → 고쳐쓰기 → 자기평가 → 맞춤법 교정 → 최종 완성]의 전체 글쓰기 순환 과정을 완수했습니다.
@@ -448,19 +746,11 @@ ${record.finalWriting || record.revisedWriting || record.draft || ''}
   "nextStepSuggestion": "향후 발전을 위한 맞춤 조언 (교사 참고용)"
 }`;
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
-      }
-    });
-
-    const responseText = response.text || '{}';
-    const parsed = JSON.parse(responseText.trim());
+    const response = await generateContentWithFallback(prompt);
+    const parsed = parseJsonSafely(response.text, {});
     res.json({
       success: true,
-      aiAssessmentDraft: parsed.processAssessmentDraft || responseText,
+      aiAssessmentDraft: parsed.processAssessmentDraft || response.text,
       assessmentDetails: parsed
     });
   } catch (err: any) {

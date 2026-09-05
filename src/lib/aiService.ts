@@ -358,13 +358,14 @@ export const PRESET_STORY_IDEAS: Record<keyof StoryFramework, StoryIdeaSuggestio
 export async function requestStoryIdeas(
   stage: keyof StoryFramework,
   currentData: Partial<StoryFramework>,
-  grade: number = 6
+  grade: number = 6,
+  topicTitle?: string
 ): Promise<StoryIdeaSuggestion[]> {
   try {
     const res = await fetch('/api/gemini/story-ideas', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stage, currentData, grade })
+      body: JSON.stringify({ stage, currentData, grade, topicTitle })
     });
 
     if (!res.ok) {
@@ -387,7 +388,7 @@ export async function requestStoryIdeas(
   // 첫 문장이 있으면 첫 문장 맞춤형 동적 폴백 제안 생성
   const fs = currentData.firstSentence?.trim();
   if (fs) {
-    const shortFs = fs.length > 20 ? `${fs.slice(0, 20)}...` : fs;
+    const shortFs = fs.length > 25 ? `${fs.slice(0, 25)}...` : fs;
     if (stage === 'character') {
       return [
         {
@@ -400,7 +401,7 @@ export async function requestStoryIdeas(
           id: 'dyn_ch_2',
           title: '비밀을 품은 친구',
           description: `첫 문장의 상황에 대해 남모를 비밀이나 단서를 간직한 캐릭터`,
-          preview: `겉모습은 평범해 보이지만 가슴속에 아무도 모르는 마법의 비밀을 간직한 채 조용히 관찰하던 주인공이었다.`
+          preview: `겉모습은 평범해 보이지만 첫 문장에서 벌어진 일의 비밀을 가슴속에 간직한 채 조용히 관찰하던 주인공이었다.`
         },
         {
           id: 'dyn_ch_3',
@@ -415,7 +416,7 @@ export async function requestStoryIdeas(
         {
           id: 'dyn_gl_1',
           title: '진실 찾기',
-          description: '첫 문장에서 벌어진 이상하고 놀라운 일의 원인을 밝혀내는 것',
+          description: `"${shortFs}"에서 벌어진 이상하고 놀라운 일의 원인을 밝혀내는 것`,
           preview: `방금 일어난 기묘한 일의 비밀을 풀고 잃어버린 소중한 무언가를 제자리로 되돌려놓는 것이었다.`
         },
         {
@@ -429,6 +430,94 @@ export async function requestStoryIdeas(
           title: '새로운 세상 탐험',
           description: '첫 문장을 계기로 펼쳐질 미지의 세계로 당당하게 모험을 떠나는 것',
           preview: `두려움을 떨치고 한 번도 가보지 못한 미지의 세상으로 나아가 꿈꾸던 소망을 이루는 것이었다.`
+        }
+      ];
+    }
+    if (stage === 'obstacle') {
+      return [
+        {
+          id: 'dyn_ob_1',
+          title: '갑작스러운 돌발 상황',
+          description: `"${shortFs}" 이후 예상치 못한 장애물이 나타나 앞을 가로막는 상황`,
+          preview: `목표를 향해 나아가려는 순간, 거센 바람과 함께 아무도 예상하지 못했던 거대한 장벽이 눈앞을 가로막았다.`
+        },
+        {
+          id: 'dyn_ob_2',
+          title: '방해하는 훼방꾼',
+          description: '첫 문장의 비밀을 가로채려는 짓궂은 상대가 나타나는 전개',
+          preview: `비밀을 호시탐탐 노리던 짓궂은 방해꾼이 나타나 중요한 단서를 낚아채 달아나버렸다.`
+        },
+        {
+          id: 'dyn_ob_3',
+          title: '마음의 두려움',
+          description: '스스로의 두려움이나 오해로 인해 풀기 어려운 갈등에 부딪히는 상황',
+          preview: `시간이 촉박해질수록 자꾸만 실수가 이어졌고, 친구와의 사소한 오해까지 겹쳐 마음이 무거워졌다.`
+        }
+      ];
+    }
+    if (stage === 'helper') {
+      return [
+        {
+          id: 'dyn_hp_1',
+          title: '믿음직한 조력자',
+          description: '위기의 순간 지혜로운 조언을 건네는 든든한 친구',
+          preview: `어려움에 빠진 순간 어디선가 나타난 작은 친구가 따뜻한 손을 내밀며 결정적인 힌트를 속삭여주었다.`
+        },
+        {
+          id: 'dyn_hp_2',
+          title: '신비한 마법 도구',
+          description: '첫 문장의 상황을 뒤집을 수 있는 특별한 물건',
+          preview: `주머니 깊숙한 곳에서 발견한 낡은 도구가 은은한 빛을 내뿜으며 올바른 방향을 가리키기 시작했다.`
+        },
+        {
+          id: 'dyn_hp_3',
+          title: '숨겨진 나의 용기',
+          description: '어려움 속에서 스스로 깨달은 내면의 힘',
+          preview: `도망치고 싶던 순간, 포기하지 않겠다고 다짐하자 마음 깊은 곳에서 뜨거운 용기가 솟아올랐다.`
+        }
+      ];
+    }
+    if (stage === 'resolution') {
+      return [
+        {
+          id: 'dyn_rs_1',
+          title: '기지와 협동으로 극복',
+          description: '친구와 힘을 합쳐 번뜩이는 아이디어로 시련을 이겨내는 장면',
+          preview: `친구와 눈빛을 교환한 주인공은 기발한 작전을 펼쳐 방해물을 슬기롭게 뛰어넘었다.`
+        },
+        {
+          id: 'dyn_rs_2',
+          title: '진심 어린 소통',
+          description: '싸우지 않고 진심을 전해 갈등을 눈 녹듯 푸는 장면',
+          preview: `솔직한 마음을 담은 따뜻한 한마디를 건네자, 굳게 닫혀 있던 상대방의 마음이 사르르 열렸다.`
+        },
+        {
+          id: 'dyn_rs_3',
+          title: '용기 있는 도전',
+          description: '두려움을 딛고 온 힘을 다해 문제를 해결하는 통쾌한 장면',
+          preview: `심호흡을 한 번 크게 내쉬고 온 힘을 다해 손을 뻗어 마침내 엉킨 문제를 말끔히 풀어냈다.`
+        }
+      ];
+    }
+    if (stage === 'ending') {
+      return [
+        {
+          id: 'dyn_ed_1',
+          title: '따뜻한 감동의 마무리',
+          description: '모험이 끝나고 마음이 한 뼘 더 자란 훈훈한 결말',
+          preview: `모든 모험이 끝나고 일상으로 돌아왔지만, 주인공의 가슴속에는 잊을 수 없는 소중한 추억과 우정이 영원히 남게 되었다.`
+        },
+        {
+          id: 'dyn_ed_2',
+          title: '새로운 여운과 설렘',
+          description: '또 다른 신비로운 모험을 예고하며 미소 짓는 결말',
+          preview: `창밖의 노을을 바라보며 미소를 지었다. 내일은 또 어떤 흥미진진한 비밀이 나를 기다리고 있을까?`
+        },
+        {
+          id: 'dyn_ed_3',
+          title: '유쾌하고 흐뭇한 반전',
+          description: '친구들과 함께 활짝 웃으며 행복하게 끝나는 결말',
+          preview: `서로의 얼굴을 마주 보며 까르르 웃음을 터뜨렸다. 오늘은 우리 모두에게 평생 잊지 못할 가장 특별한 날이었다.`
         }
       ];
     }

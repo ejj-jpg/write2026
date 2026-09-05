@@ -483,8 +483,15 @@ export const WritingWizard: React.FC<WritingWizardProps> = ({
 
   // Step 4: AI Feedback Request
   const handleRequestAiFeedback = async () => {
-    if (!record.draft.trim()) {
-      setAiError('먼저 3단계에서 초고를 작성해주세요.');
+    let draftText = record.draft.trim();
+    if (!draftText) {
+      const skeleton = getOutlineDraftText(record);
+      if (skeleton) {
+        draftText = skeleton;
+      }
+    }
+    if (!draftText) {
+      setAiError('초고 내용이 없습니다. 2단계 이야기 흐름을 계획하거나 3단계에서 초고를 작성해주세요.');
       return;
     }
     setAiLoading(true);
@@ -492,14 +499,15 @@ export const WritingWizard: React.FC<WritingWizardProps> = ({
     try {
       const feedback = await requestDraftFeedback(
         record.topicTitle,
-        record.draft,
+        draftText,
         record.planning,
         student.grade
       );
       const updated: WritingRecord = {
         ...record,
+        draft: record.draft || draftText,
         aiFeedback: feedback,
-        revisedWriting: record.revisedWriting || record.draft, // init revision with draft
+        revisedWriting: record.revisedWriting || draftText, // init revision with draft
         updatedAt: Date.now()
       };
       setRecord(updated);
@@ -761,6 +769,7 @@ export const WritingWizard: React.FC<WritingWizardProps> = ({
           <div className="space-y-6 animate-in fade-in">
             <PictureBookChat
               student={student}
+              topicTitle={record.topicTitle || record.planning.title}
               initialFramework={record.planning.storyFramework}
               onFrameworkUpdate={handleFrameworkUpdate}
               onProceedToNextStep={() => handleStepChange(2)}

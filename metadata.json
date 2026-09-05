@@ -1,0 +1,6 @@
+{
+  "name": "AI와 함께하는 글쓰기 성장",
+  "description": "초등학생을 위한 그림책(동화책) 만들기, 첫 문장과 6대 이야기 요소 작성, Gemini 3가지 아이디어 추천 및 단계별 피드백 웹 애플리케이션",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

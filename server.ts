@@ -22,6 +22,17 @@ const CANDIDATE_MODELS = [
 
 app.use(express.json({ limit: '10mb' }));
 
+// CORS & Preflight handling for all /api endpoints
+app.use('/api', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 // Helper to get Gemini client
 function getGeminiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -116,7 +127,7 @@ function generateFallbackFeedback(
 }
 
 // 1. Health check
-app.get('/api/health', (req, res) => {
+app.all(['/api/health', '/api/health/'], (req, res) => {
   res.json({
     status: 'ok',
     timestamp: Date.now(),
@@ -125,16 +136,23 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// 2. Gemini connection test
-app.post('/api/gemini/test', async (req, res) => {
+// 2. Gemini connection test (supports both GET and POST)
+app.all(['/api/gemini/test', '/api/gemini/test/'], async (req, res) => {
   try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: '서버에 GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다.'
+      });
+    }
+
     const result = await generateContentWithFallback(
       '초등학생을 위한 따뜻한 한 줄 환영 인사를 30자 이내로 써주세요.',
       { responseMimeType: 'text/plain' }
     );
     res.json({
       success: true,
-      message: result.text.trim() || 'Gemini 연결 성공!',
+      message: result.text.trim() || 'Gemini AI 연결이 정상 작동 중입니다.',
       model: result.model
     });
   } catch (err: any) {
@@ -314,7 +332,7 @@ function generateDynamicStoryIdeas(
 }
 
 // 2-1. Picture Book Story Ideas Generation (학생의 첫 문장 및 이전 단계 설정에 맞춘 3가지 아이디어 예시 생성)
-app.post('/api/gemini/story-ideas', async (req, res) => {
+app.post(['/api/gemini/story-ideas', '/api/gemini/story-ideas/'], async (req, res) => {
   try {
     const { stage, currentData = {}, grade = 6, topicTitle } = req.body;
 
@@ -467,7 +485,7 @@ ${contextDesc || '(아직 앞 단계 내용이 없습니다.)'}
 });
 
 // 2-2. Step 2 Outline 1-Sentence Examples (계획하기 2단계 발단·전개·절정·결말 각 1문장 예시 생성)
-app.post('/api/gemini/outline-examples', async (req, res) => {
+app.post(['/api/gemini/outline-examples', '/api/gemini/outline-examples/'], async (req, res) => {
   try {
     const { storyFramework = {}, grade = 6 } = req.body;
 
@@ -524,7 +542,7 @@ ${contextDesc || '(아직 구체적인 씨앗이 적히지 않았습니다. 학�
 });
 
 // 3. Topic generation
-app.post('/api/gemini/topics', async (req, res) => {
+app.post(['/api/gemini/topics', '/api/gemini/topics/'], async (req, res) => {
   try {
     const { grade = 4, category = '자유 글쓰기', keywords = '' } = req.body;
 
@@ -564,7 +582,7 @@ app.post('/api/gemini/topics', async (req, res) => {
 // 규정:
 // 잘된 점, 보완할 점, 판단 근거, 가장 먼저 고칠 부분, 스스로 생각할 질문 포함
 // 학생의 글을 AI가 대신 작성하지 마세요!
-app.post('/api/gemini/feedback', async (req, res) => {
+app.post(['/api/gemini/feedback', '/api/gemini/feedback/'], async (req, res) => {
   try {
     const { topicTitle, draft, planning, grade = 4 } = req.body;
     if (!draft || draft.trim().length === 0) {
@@ -642,7 +660,7 @@ ${draft}
 // 5. Proofreading & Spacing check
 // 규정: 학생의 생각과 내용을 바꾸지 않고 맞춤법, 띄어쓰기, 문장 부호, 명백한 오타만 점검
 // 검사 전 글과 검사 후 글을 모두 저장하고, 학생이 수정 제안을 개별 또는 전체 적용할 수 있게 하세요.
-app.post('/api/gemini/proofread', async (req, res) => {
+app.post(['/api/gemini/proofread', '/api/gemini/proofread/'], async (req, res) => {
   try {
     const { text, grade = 4 } = req.body;
     if (!text || text.trim().length === 0) {
@@ -697,7 +715,7 @@ ${text}`;
 });
 
 // 6. Teacher Process-focused Assessment Draft (과정중심평가 초안 생성)
-app.post('/api/gemini/process-assessment', async (req, res) => {
+app.post(['/api/gemini/process-assessment', '/api/gemini/process-assessment/'], async (req, res) => {
   try {
     const { studentName, grade = 4, record } = req.body;
     if (!record) {
@@ -760,6 +778,14 @@ ${record.finalWriting || record.revisedWriting || record.draft || ''}
       error: err.message || '과정중심평가 초안 생성에 실패했습니다.'
     });
   }
+});
+
+// Fallback 404 handler for all unknown /api routes (ensures JSON response instead of HTML)
+app.all(['/api/*', '/api'], (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: `요청하신 API 경로(${req.method} ${req.originalUrl})를 찾을 수 없습니다.`
+  });
 });
 
 // Vite & Static Asset Handling

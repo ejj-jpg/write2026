@@ -69,39 +69,76 @@ export const PRESET_TOPICS: DailyTopic[] = [
 
 export async function testGeminiConnection(): Promise<GeminiTestResult> {
   const startTime = performance.now();
-  try {
-    const res = await fetch('/api/gemini/test', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    });
-    const latencyMs = Math.round(performance.now() - startTime);
 
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
+  // Retry up to 2 times to handle server restarts / cold starts smoothly
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch('/api/gemini/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ping: true, attempt })
+      });
+      const latencyMs = Math.round(performance.now() - startTime);
+
+      if (!res.ok) {
+        // If 404 on attempt 1, wait 600ms and retry once (handles dev server reload)
+        if (attempt === 1 && (res.status === 404 || res.status === 502 || res.status === 503)) {
+          await new Promise((r) => setTimeout(r, 600));
+          continue;
+        }
+
+        const errData = await res.json().catch(() => ({}));
+        let errMsg = errData.error || `서버 응답 오류 (${res.status})`;
+
+        // Diagnostic probe if 404 or 500
+        try {
+          const healthRes = await fetch('/api/health');
+          if (healthRes.ok) {
+            const healthData = await healthRes.json();
+            if (!healthData.hasGeminiKey) {
+              errMsg = '서버에 GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다.';
+            }
+          }
+        } catch {
+          errMsg = `서버 연결 대기 중 (${res.status}). 잠시 후 다시 테스트해주세요.`;
+        }
+
+        return {
+          success: false,
+          message: errMsg,
+          error: errData.error || `HTTP ${res.status}`,
+          latencyMs
+        };
+      }
+
+      const data = await res.json();
+      return {
+        success: true,
+        message: data.message || 'Gemini AI 연결이 정상 작동 중입니다.',
+        model: data.model,
+        latencyMs
+      };
+    } catch (err: any) {
+      if (attempt === 1) {
+        await new Promise((r) => setTimeout(r, 600));
+        continue;
+      }
+      const latencyMs = Math.round(performance.now() - startTime);
       return {
         success: false,
-        message: errData.error || `서버 오류 (${res.status})`,
-        error: errData.error,
+        message: `Gemini API 연결 실패: ${err.message || '네트워크 연결 불가'}`,
+        error: err.message,
         latencyMs
       };
     }
-
-    const data = await res.json();
-    return {
-      success: true,
-      message: data.message,
-      model: data.model,
-      latencyMs
-    };
-  } catch (err: any) {
-    const latencyMs = Math.round(performance.now() - startTime);
-    return {
-      success: false,
-      message: `Gemini API 연결 실패: ${err.message}`,
-      error: err.message,
-      latencyMs
-    };
   }
+
+  const latencyMs = Math.round(performance.now() - startTime);
+  return {
+    success: false,
+    message: '서버 연결에 실패했습니다. 잠시 후 다시 시도해주세요.',
+    latencyMs
+  };
 }
 
 export async function requestAITopics(grade: number, category: string, keywords: string = ''): Promise<DailyTopic[]> {

@@ -1009,16 +1009,35 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onClose }) =
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-extrabold text-[#2D2A26]">Gemini AI API</span>
                   {geminiTestResult && (
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
-                      geminiTestResult.success ? 'bg-[#F0F7F4] text-[#5A8F7B]' : 'bg-rose-100 text-rose-800'
-                    }`}>
-                      {geminiTestResult.success ? `정상 (${geminiTestResult.latencyMs}ms)` : '실패'}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                        geminiTestResult.success ? 'bg-[#F0F7F4] text-[#5A8F7B]' : 'bg-rose-100 text-rose-800'
+                      }`}>
+                        {geminiTestResult.success ? `정상 (${geminiTestResult.latencyMs}ms)` : '실패'}
+                      </span>
+                      {!geminiTestResult.success && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setTestingConnection(true);
+                            try {
+                              const res = await testGeminiConnection();
+                              setGeminiTestResult(res);
+                            } finally {
+                              setTestingConnection(false);
+                            }
+                          }}
+                          className="text-[10px] font-bold text-[#A67C52] hover:underline"
+                        >
+                          다시 테스트
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
                 <p className="text-xs text-[#4A443F] leading-relaxed">
                   {geminiTestResult
-                    ? `${geminiTestResult.message} (${geminiTestResult.model || ''})`
+                    ? `${geminiTestResult.message}${geminiTestResult.model ? ` (${geminiTestResult.model})` : ''}`
                     : '테스트 실행 전입니다. [실시간 테스트 실행] 버튼을 눌러주세요.'}
                 </p>
               </div>

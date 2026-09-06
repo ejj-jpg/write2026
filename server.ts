@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
 
@@ -32,11 +31,19 @@ app.use((req, res, next) => {
   next();
 });
 
+// Normalize URL prefix for Vercel / serverless proxies (handles both /api/gemini and /gemini)
+app.use((req, res, next) => {
+  if (!req.url.startsWith('/api') && (req.url.startsWith('/gemini') || req.url.startsWith('/health'))) {
+    req.url = '/api' + req.url;
+  }
+  next();
+});
+
 // Helper to get Gemini client
 function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY가 환경변수에 설정되어 있지 않습니다.');
+    throw new Error('GEMINI_API_KEY가 환경변수에 설정되어 있지 않습니다. Vercel 프로젝트 Settings > Environment Variables에 GEMINI_API_KEY를 등록해주세요.');
   }
   return new GoogleGenAI({ apiKey });
 }
@@ -139,21 +146,24 @@ function generateFallbackFeedback(
 
 // 1. Health check
 app.all(['/api/health', '/api/health/', '/health'], (req, res) => {
+  const hasKey = !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY);
   res.json({
     status: 'ok',
     timestamp: Date.now(),
-    hasGeminiKey: !!process.env.GEMINI_API_KEY,
-    candidateModels: CANDIDATE_MODELS
+    hasGeminiKey: hasKey,
+    candidateModels: CANDIDATE_MODELS,
+    platform: process.env.VERCEL ? 'vercel' : 'node'
   });
 });
 
 // 2. Gemini connection test (supports both GET and POST)
 app.all(['/api/gemini/test', '/api/gemini/test/', '/gemini/test'], async (req, res) => {
   try {
-    if (!process.env.GEMINI_API_KEY) {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) {
       return res.status(500).json({
         success: false,
-        error: '서버에 GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다.'
+        error: '서버에 GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다. Vercel 대시보드 Settings > Environment Variables에서 GEMINI_API_KEY를 추가해주세요.'
       });
     }
 
@@ -938,6 +948,7 @@ app.all(['/api/*', '/api'], (req, res) => {
 // Vite & Static Asset Handling
 async function setupViteOrStatic() {
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -956,4 +967,10 @@ async function setupViteOrStatic() {
   });
 }
 
-setupViteOrStatic();
+// Only start standalone server if not in a serverless environment (like Vercel)
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
+  setupViteOrStatic();
+}
+
+export default app;
+

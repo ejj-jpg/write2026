@@ -70,72 +70,113 @@ export const PRESET_TOPICS: DailyTopic[] = [
 export async function testGeminiConnection(): Promise<GeminiTestResult> {
   const startTime = performance.now();
 
-  // Try endpoints with cache-busting to prevent stale 404 browser cache
-  const candidateUrls = [
-    `/api/gemini/test?_t=${Date.now()}`,
-    `/api/gemini/test/?_t=${Date.now()}`,
-    `/gemini/test?_t=${Date.now()}`
-  ];
+  // 1. First try GET /api/gemini/test (Simple request: no CORS preflight, sends cookies directly)
+  try {
+    const res = await fetch(`/api/gemini/test?_t=${Date.now()}`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
 
-  for (const url of candidateUrls) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Pragma': 'no-cache',
-          'Cache-Control': 'no-cache'
-        },
-        cache: 'no-store',
-        body: JSON.stringify({ ping: true, timestamp: Date.now() })
-      });
+    const latencyMs = Math.round(performance.now() - startTime);
+    const contentType = res.headers.get('content-type') || '';
 
-      const latencyMs = Math.round(performance.now() - startTime);
-
-      if (res.ok) {
-        const data = await res.json();
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (res.ok && data.success) {
         return {
           success: true,
           message: data.message || 'Gemini AI 연결이 정상 작동 중입니다.',
-          model: data.model,
+          model: data.model || 'gemini-3.1-flash-lite',
           latencyMs
         };
       }
-
-      // If server returned non-404 error (e.g. 500), parse the message directly
-      if (res.status !== 404) {
-        const errData = await res.json().catch(() => ({}));
+      if (!res.ok) {
         return {
           success: false,
-          message: errData.error || `서버 응답 오류 (${res.status})`,
-          error: errData.error || `HTTP ${res.status}`,
+          message: data.error || `서버 응답 오류 (${res.status})`,
+          error: data.error,
           latencyMs
         };
       }
-    } catch {
-      // Continue to next endpoint attempt
+    } else if (contentType.includes('text/html')) {
+      // Intercepted by proxy or auth check
+      return {
+        success: false,
+        message: '브라우저 보안 세션 갱신이 필요합니다. 브라우저 페이지를 새로고침(F5) 후 다시 시도해 주세요.',
+        error: 'Proxy HTML Response (302/Cookie Check)',
+        latencyMs
+      };
     }
+  } catch (getErr: any) {
+    console.warn('GET /api/gemini/test error, falling back to POST:', getErr);
   }
 
-  // If all POST attempts failed with 404 or network issue, probe /api/health
+  // 2. Try POST /api/gemini/test
+  try {
+    const res = await fetch(`/api/gemini/test?_t=${Date.now()}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ ping: true, timestamp: Date.now() })
+    });
+
+    const latencyMs = Math.round(performance.now() - startTime);
+    const contentType = res.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (res.ok && data.success) {
+        return {
+          success: true,
+          message: data.message || 'Gemini AI 연결이 정상 작동 중입니다.',
+          model: data.model || 'gemini-3.1-flash-lite',
+          latencyMs
+        };
+      }
+      return {
+        success: false,
+        message: data.error || `서버 응답 오류 (${res.status})`,
+        error: data.error,
+        latencyMs
+      };
+    }
+  } catch (postErr: any) {
+    console.warn('POST /api/gemini/test error:', postErr);
+  }
+
+  // 3. Fallback to /api/health probe
   try {
     const healthRes = await fetch(`/api/health?_t=${Date.now()}`, {
-      cache: 'no-store'
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json'
+      }
     });
-    if (healthRes.ok) {
+
+    const latencyMs = Math.round(performance.now() - startTime);
+    const contentType = healthRes.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json') && healthRes.ok) {
       const healthData = await healthRes.json();
-      const latencyMs = Math.round(performance.now() - startTime);
       if (healthData.hasGeminiKey) {
         return {
           success: true,
           message: `서버 및 Gemini 키 설정 정상 확인됨 (모델: ${healthData.candidateModels?.[0] || 'gemini-3.1-flash-lite'})`,
-          model: healthData.candidateModels?.[0],
+          model: healthData.candidateModels?.[0] || 'gemini-3.1-flash-lite',
           latencyMs
         };
       }
       return {
         success: false,
         message: '서버는 정상 구동 중이나 GEMINI_API_KEY 환경변수가 비어 있습니다.',
+        error: 'MISSING_API_KEY',
         latencyMs
       };
     }
@@ -146,7 +187,8 @@ export async function testGeminiConnection(): Promise<GeminiTestResult> {
   const latencyMs = Math.round(performance.now() - startTime);
   return {
     success: false,
-    message: '서버 연결 실패. 개발 서버가 시작 중일 수 있으니 잠시 후 다시 테스트해주세요.',
+    message: '서버 연결 확인 중입니다. 브라우저 페이지를 새로고침(F5)하거나 잠시 후 다시 테스트해주세요.',
+    error: 'NETWORK_OR_PROXY_INTERCEPTION',
     latencyMs
   };
 }
@@ -155,12 +197,11 @@ export async function requestAITopics(grade: number, category: string, keywords:
   try {
     const res = await fetch(`/api/gemini/topics?_t=${Date.now()}`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'Pragma': 'no-cache',
-        'Cache-Control': 'no-cache'
+        'Accept': 'application/json'
       },
-      cache: 'no-store',
       body: JSON.stringify({ grade, category, keywords })
     });
 
@@ -196,12 +237,11 @@ export async function requestDraftFeedback(
 ): Promise<AiFeedbackData> {
   const res = await fetch(`/api/gemini/feedback?_t=${Date.now()}`, {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'Pragma': 'no-cache',
-      'Cache-Control': 'no-cache'
+      'Accept': 'application/json'
     },
-    cache: 'no-store',
     body: JSON.stringify({ topicTitle, draft, planning, grade })
   });
 
@@ -224,12 +264,11 @@ export async function requestProofreading(
 }> {
   const res = await fetch(`/api/gemini/proofread?_t=${Date.now()}`, {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'Pragma': 'no-cache',
-      'Cache-Control': 'no-cache'
+      'Accept': 'application/json'
     },
-    cache: 'no-store',
     body: JSON.stringify({ text, grade })
   });
 
@@ -260,12 +299,11 @@ export async function requestProcessAssessmentDraft(
 ): Promise<string> {
   const res = await fetch(`/api/gemini/process-assessment?_t=${Date.now()}`, {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'Pragma': 'no-cache',
-      'Cache-Control': 'no-cache'
+      'Accept': 'application/json'
     },
-    cache: 'no-store',
     body: JSON.stringify({ studentName, grade, record })
   });
 
@@ -547,12 +585,11 @@ export async function requestStoryIdeas(
   try {
     const res = await fetch(`/api/gemini/story-ideas?_t=${Date.now()}`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'Pragma': 'no-cache',
-        'Cache-Control': 'no-cache'
+        'Accept': 'application/json'
       },
-      cache: 'no-store',
       body: JSON.stringify({
         stage,
         currentData,
@@ -599,12 +636,11 @@ export async function requestOutlineExamples(
   try {
     const res = await fetch(`/api/gemini/outline-examples?_t=${Date.now()}`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'Pragma': 'no-cache',
-        'Cache-Control': 'no-cache'
+        'Accept': 'application/json'
       },
-      cache: 'no-store',
       body: JSON.stringify({ storyFramework, grade })
     });
 

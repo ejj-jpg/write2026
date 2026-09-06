@@ -11,18 +11,18 @@ const PORT = 3000;
 
 // High-speed, high-availability Gemini models with automatic failover
 const CANDIDATE_MODELS = [
-  'gemini-flash-latest',
   'gemini-3.1-flash-lite',
-  'gemini-3.8-flash'
+  'gemini-3.5-flash-lite',
+  'gemini-3.6-flash'
 ];
 
 app.use(express.json({ limit: '10mb' }));
 
-// CORS, Preflight, and Cache-Control handling for all /api endpoints
-app.use('/api', (req, res, next) => {
+// Global CORS, Preflight, and Cache-Control handling
+app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Pragma, Cache-Control');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', '*');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
@@ -90,8 +90,14 @@ async function generateContentWithFallback(
       ]);
       console.log(`[Gemini] Model ${model} responded in ${Date.now() - startTime}ms`);
 
-      if (response && response.text) {
-        return { text: response.text, model };
+      const extractedText = (
+        response?.text ||
+        (response as any)?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') ||
+        ''
+      ).trim();
+
+      if (extractedText) {
+        return { text: extractedText, model };
       }
     } catch (err: any) {
       console.warn(`[Gemini] Model ${model} failed (${err?.status || err?.message}), trying next fallback...`);

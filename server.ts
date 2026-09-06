@@ -12,8 +12,8 @@ const PORT = 3000;
 // High-speed, high-availability Gemini models with automatic failover
 const CANDIDATE_MODELS = [
   'gemini-3.1-flash-lite',
-  'gemini-3.5-flash-lite',
-  'gemini-3.6-flash'
+  'gemini-flash-latest',
+  'gemini-3.8-flash'
 ];
 
 app.use(express.json({ limit: '10mb' }));
@@ -114,9 +114,10 @@ function generateFallbackFeedback(
   planning: any,
   grade: number = 4
 ) {
-  const wordCount = draft.trim().split(/\s+/).length;
-  const sentenceCount = (draft.match(/[.!?]/g) || []).length || 1;
-  const title = planning?.title || '나의 이야기';
+  const safeDraft = typeof draft === 'string' ? draft : '';
+  const wordCount = safeDraft.trim().split(/\s+/).filter(Boolean).length || 10;
+  const sentenceCount = (safeDraft.match(/[.!?]/g) || []).length || 2;
+  const title = (planning?.title && typeof planning.title === 'string') ? planning.title : '나의 이야기';
 
   return {
     strengths: [
@@ -713,10 +714,15 @@ app.post(['/api/gemini/topics', '/api/gemini/topics/'], async (req, res) => {
 // 학생의 글을 AI가 대신 작성하지 마세요!
 app.post(['/api/gemini/feedback', '/api/gemini/feedback/'], async (req, res) => {
   try {
-    const { topicTitle, draft, planning, grade = 4 } = req.body;
-    if (!draft || draft.trim().length === 0) {
+    const { topicTitle, draft, planning, grade = 4 } = req.body || {};
+    const safeDraft = typeof draft === 'string' ? draft.trim() : '';
+    if (!safeDraft) {
       return res.status(400).json({ success: false, error: '초고 내용을 입력해주세요.' });
     }
+
+    const ideasText = Array.isArray(planning?.ideas)
+      ? planning.ideas.join(', ')
+      : (typeof planning?.ideas === 'string' ? planning.ideas : '없음');
 
     const prompt = `당신은 초등학교 글쓰기 전문 선생님입니다.
 초등학교 ${grade}학년 어린이가 쓴 초고를 읽고, 아이의 글쓰기 동기를 북돋우고 구체적으로 발전시킬 수 있는 따뜻하고 건설적인 피드백을 제공해 주세요.
@@ -725,10 +731,10 @@ app.post(['/api/gemini/feedback', '/api/gemini/feedback/'], async (req, res) => 
 [학생 글쓰기 계획]:
 - 제목: ${planning?.title || '미정'}
 - 글의 목적/종류: ${planning?.genre || '생활문'}
-- 전달하고 싶은 중심 생각: ${planning?.ideas?.join(', ') || '없음'}
+- 전달하고 싶은 중심 생각: ${ideasText}
 
 [학생의 실제 초고]:
-${draft}
+${safeDraft}
 
 [중요 지침]:
 1. 학생의 글을 AI가 대신 써주거나 문장을 완성해주지 마세요! 아이가 스스로 고치도록 안내만 해야 합니다.
@@ -751,38 +757,50 @@ ${draft}
   ]
 }`;
 
+    const fallback = generateFallbackFeedback(safeDraft, planning, grade);
+
     try {
       const response = await generateContentWithFallback(prompt);
       const parsed = parseJsonSafely(response.text, null);
 
       if (parsed && typeof parsed === 'object') {
-        const hasStrengths = Array.isArray(parsed.strengths) && parsed.strengths.length > 0;
-        if (hasStrengths) {
-          return res.json({ success: true, feedback: parsed, model: response.model });
-        }
-        // If parsed is valid JSON but strengths is missing or formatted differently
-        return res.json({
-          success: true,
-          feedback: {
-            ...generateFallbackFeedback(draft, planning, grade),
-            ...parsed
-          },
-          model: response.model
-        });
+        const sanitized = {
+          strengths: Array.isArray(parsed.strengths) && parsed.strengths.length > 0
+            ? parsed.strengths.map((s: any) => String(s))
+            : fallback.strengths,
+          improvements: Array.isArray(parsed.improvements) && parsed.improvements.length > 0
+            ? parsed.improvements.map((s: any) => String(s))
+            : fallback.improvements,
+          reasoning: typeof parsed.reasoning === 'string' && parsed.reasoning.trim().length > 0
+            ? parsed.reasoning
+            : (typeof parsed.reasoning === 'object' ? JSON.stringify(parsed.reasoning) : fallback.reasoning),
+          topPriority: typeof parsed.topPriority === 'string' && parsed.topPriority.trim().length > 0
+            ? parsed.topPriority
+            : (typeof parsed.topPriority === 'object' ? JSON.stringify(parsed.topPriority) : fallback.topPriority),
+          selfReflectQuestions: Array.isArray(parsed.selfReflectQuestions) && parsed.selfReflectQuestions.length > 0
+            ? parsed.selfReflectQuestions.map((q: any) => String(q))
+            : fallback.selfReflectQuestions
+        };
+        return res.json({ success: true, feedback: sanitized, model: response.model });
       }
     } catch (apiErr: any) {
       console.warn('Gemini feedback generation failed, generating smart pedagogical fallback:', apiErr?.message);
     }
 
     // Smart fallback if all model calls temporarily fail
-    const fallback = generateFallbackFeedback(draft, planning, grade);
-    res.json({ success: true, feedback: fallback, isFallback: true });
+    return res.json({ success: true, feedback: fallback, isFallback: true });
   } catch (err: any) {
     console.error('Feedback error:', err);
-    res.status(500).json({
-      success: false,
-      error: err.message || 'AI 피드백 생성에 실패했습니다.'
-    });
+    try {
+      const fallback = generateFallbackFeedback(req.body?.draft || '', req.body?.planning, req.body?.grade || 4);
+      return res.json({ success: true, feedback: fallback, isFallback: true });
+    } catch {
+      const errMsg = typeof err?.message === 'string' ? err.message : 'AI 피드백 생성에 실패했습니다.';
+      return res.status(500).json({
+        success: false,
+        error: errMsg
+      });
+    }
   }
 });
 

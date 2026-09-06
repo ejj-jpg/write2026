@@ -483,7 +483,7 @@ export const WritingWizard: React.FC<WritingWizardProps> = ({
 
   // Step 4: AI Feedback Request
   const handleRequestAiFeedback = async () => {
-    let draftText = record.draft.trim();
+    let draftText = (record.draft || '').trim();
     if (!draftText) {
       const skeleton = getOutlineDraftText(record);
       if (skeleton) {
@@ -498,10 +498,17 @@ export const WritingWizard: React.FC<WritingWizardProps> = ({
     setAiError('');
     try {
       const feedback = await requestDraftFeedback(
-        record.topicTitle,
+        record.topicTitle || '자유 주제',
         draftText,
-        record.planning,
-        student.grade
+        record.planning || {
+          title: record.topicTitle || '나의 글',
+          genre: '생활문',
+          purpose: '생각 나누기',
+          audience: '선생님과 친구들',
+          ideas: [],
+          outline: { beginning: '', middle: '', ending: '' }
+        },
+        student.grade || 4
       );
       const updated: WritingRecord = {
         ...record,
@@ -513,8 +520,18 @@ export const WritingWizard: React.FC<WritingWizardProps> = ({
       setRecord(updated);
       await persistRecord(updated);
     } catch (err: any) {
-      console.error(err);
-      setAiError(err.message || 'AI 피드백 생성 실패. 잠시 후 다시 시도해주세요.');
+      console.error('handleRequestAiFeedback error:', err);
+      const rawMsg = typeof err === 'string'
+        ? err
+        : (typeof err?.message === 'string'
+            ? err.message
+            : (typeof err?.error === 'string'
+                ? err.error
+                : ''));
+      const cleanMsg = (!rawMsg || rawMsg === '[object Object]')
+        ? 'AI 피드백을 생성하지 못했습니다. 잠시 후 다시 시도해주세요.'
+        : rawMsg;
+      setAiError(cleanMsg);
     } finally {
       setAiLoading(false);
     }
@@ -522,15 +539,15 @@ export const WritingWizard: React.FC<WritingWizardProps> = ({
 
   // Step 8: Proofreading Request
   const handleRequestProofreading = async () => {
-    const textToCheck = record.revisedWriting || record.draft;
-    if (!textToCheck.trim()) {
+    const textToCheck = (record.revisedWriting || record.draft || '').trim();
+    if (!textToCheck) {
       setAiError('점검할 글 내용이 없습니다.');
       return;
     }
     setAiLoading(true);
     setAiError('');
     try {
-      const result = await requestProofreading(textToCheck, student.grade);
+      const result = await requestProofreading(textToCheck, student.grade || 4);
       const updated: WritingRecord = {
         ...record,
         beforeProofreading: result.beforeProofreading,
@@ -542,8 +559,18 @@ export const WritingWizard: React.FC<WritingWizardProps> = ({
       setRecord(updated);
       await persistRecord(updated);
     } catch (err: any) {
-      console.error(err);
-      setAiError(err.message || '맞춤법 점검 중 오류가 발생했습니다.');
+      console.error('handleRequestProofreading error:', err);
+      const rawMsg = typeof err === 'string'
+        ? err
+        : (typeof err?.message === 'string'
+            ? err.message
+            : (typeof err?.error === 'string'
+                ? err.error
+                : ''));
+      const cleanMsg = (!rawMsg || rawMsg === '[object Object]')
+        ? '맞춤법 점검 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'
+        : rawMsg;
+      setAiError(cleanMsg);
     } finally {
       setAiLoading(false);
     }
@@ -1350,9 +1377,19 @@ export const WritingWizard: React.FC<WritingWizardProps> = ({
               </div>
 
               {aiError && (
-                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2 font-medium">
-                  <AlertCircle className="w-4 h-4 text-rose-500" />
-                  <span>{aiError}</span>
+                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center justify-between gap-2 font-medium">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                    <span>{typeof aiError === 'string' && aiError !== '[object Object]' ? aiError : 'AI 피드백 요청 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAiError('')}
+                    className="text-rose-400 hover:text-rose-600 px-1 font-bold"
+                    aria-label="오류 알림 닫기"
+                  >
+                    ✕
+                  </button>
                 </div>
               )}
 
@@ -1769,8 +1806,19 @@ export const WritingWizard: React.FC<WritingWizardProps> = ({
               </div>
 
               {aiError && (
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
-                  {aiError}
+                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center justify-between gap-2 font-medium">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                    <span>{typeof aiError === 'string' && aiError !== '[object Object]' ? aiError : '맞춤법 점검 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAiError('')}
+                    className="text-rose-400 hover:text-rose-600 px-1 font-bold"
+                    aria-label="오류 알림 닫기"
+                  >
+                    ✕
+                  </button>
                 </div>
               )}
 

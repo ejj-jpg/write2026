@@ -193,6 +193,17 @@ export async function testGeminiConnection(): Promise<GeminiTestResult> {
   };
 }
 
+function extractCleanErrorMessage(errData: any, fallback: string): string {
+  if (!errData) return fallback;
+  if (typeof errData === 'string' && errData !== '[object Object]') return errData;
+  if (typeof errData.error === 'string' && errData.error !== '[object Object]') return errData.error;
+  if (errData.error && typeof errData.error.message === 'string' && errData.error.message !== '[object Object]') {
+    return errData.error.message;
+  }
+  if (typeof errData.message === 'string' && errData.message !== '[object Object]') return errData.message;
+  return fallback;
+}
+
 export async function requestAITopics(grade: number, category: string, keywords: string = ''): Promise<DailyTopic[]> {
   try {
     const res = await fetch(`/api/gemini/topics?_t=${Date.now()}`, {
@@ -207,7 +218,7 @@ export async function requestAITopics(grade: number, category: string, keywords:
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || '주제 생성 실패');
+      throw new Error(extractCleanErrorMessage(err, '주제 생성 실패'));
     }
 
     const data = await res.json();
@@ -235,22 +246,31 @@ export async function requestDraftFeedback(
   planning: WritingPlanning,
   grade: number = 4
 ): Promise<AiFeedbackData> {
-  const res = await fetch(`/api/gemini/feedback?_t=${Date.now()}`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
-    body: JSON.stringify({ topicTitle, draft, planning, grade })
-  });
+  let res: Response;
+  try {
+    res = await fetch(`/api/gemini/feedback?_t=${Date.now()}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ topicTitle, draft, planning, grade })
+    });
+  } catch (netErr: any) {
+    throw new Error('서버와 통신할 수 없습니다. 네트워크 연결 상태를 확인해주세요.');
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || '피드백 생성 중 오류가 발생했습니다.');
+    throw new Error(extractCleanErrorMessage(err, '피드백 생성 중 오류가 발생했습니다.'));
   }
 
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!data || !data.feedback) {
+    throw new Error(extractCleanErrorMessage(data, '피드백 응답 데이터가 없습니다.'));
+  }
+
   return data.feedback;
 }
 
@@ -262,26 +282,31 @@ export async function requestProofreading(
   afterProofreading: string;
   suggestions: ProofreadSuggestion[];
 }> {
-  const res = await fetch(`/api/gemini/proofread?_t=${Date.now()}`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
-    body: JSON.stringify({ text, grade })
-  });
+  let res: Response;
+  try {
+    res = await fetch(`/api/gemini/proofread?_t=${Date.now()}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ text, grade })
+    });
+  } catch (netErr: any) {
+    throw new Error('서버와 통신할 수 없습니다. 네트워크 연결 상태를 확인해주세요.');
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || '맞춤법 점검 중 오류가 발생했습니다.');
+    throw new Error(extractCleanErrorMessage(err, '맞춤법 점검 중 오류가 발생했습니다.'));
   }
 
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   return {
-    beforeProofreading: data.beforeProofreading || text,
-    afterProofreading: data.afterProofreading || text,
-    suggestions: (data.suggestions || []).map((s: any, idx: number) => ({
+    beforeProofreading: data?.beforeProofreading || text,
+    afterProofreading: data?.afterProofreading || text,
+    suggestions: (data?.suggestions || []).map((s: any, idx: number) => ({
       id: s.id || `sug_${idx}`,
       original: s.original || '',
       corrected: s.corrected || '',
@@ -297,23 +322,28 @@ export async function requestProcessAssessmentDraft(
   grade: number,
   record: WritingRecord
 ): Promise<string> {
-  const res = await fetch(`/api/gemini/process-assessment?_t=${Date.now()}`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
-    body: JSON.stringify({ studentName, grade, record })
-  });
+  let res: Response;
+  try {
+    res = await fetch(`/api/gemini/process-assessment?_t=${Date.now()}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ studentName, grade, record })
+    });
+  } catch (netErr: any) {
+    throw new Error('서버와 통신할 수 없습니다. 네트워크 연결 상태를 확인해주세요.');
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || '과정중심평가 초안 생성 실패');
+    throw new Error(extractCleanErrorMessage(err, '과정중심평가 초안 생성 실패'));
   }
 
-  const data = await res.json();
-  return data.aiAssessmentDraft || '';
+  const data = await res.json().catch(() => ({}));
+  return data?.aiAssessmentDraft || '';
 }
 
 // Helper to extract keywords and entities from a Korean sentence for client-side dynamic seeds

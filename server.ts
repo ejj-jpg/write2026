@@ -1,32 +1,31 @@
 import express from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const app = express();
 const PORT = 3000;
 
 // High-speed, high-availability Gemini models with automatic failover
 const CANDIDATE_MODELS = [
-  'gemini-3.1-flash-lite',
   'gemini-flash-latest',
+  'gemini-3.1-flash-lite',
   'gemini-3.8-flash'
 ];
 
 app.use(express.json({ limit: '10mb' }));
 
-// CORS & Preflight handling for all /api endpoints
+// CORS, Preflight, and Cache-Control handling for all /api endpoints
 app.use('/api', (req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Pragma, Cache-Control');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
@@ -64,7 +63,7 @@ function parseJsonSafely(text: string, fallback: any = {}) {
   }
 }
 
-// Universal robust generateContent with multi-model fallback
+// Universal robust generateContent with multi-model fallback and timeout
 async function generateContentWithFallback(
   contents: string,
   config?: any
@@ -76,14 +75,19 @@ async function generateContentWithFallback(
     try {
       console.log(`[Gemini] Trying model: ${model}`);
       const startTime = Date.now();
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          ...config,
-          responseMimeType: config?.responseMimeType || 'application/json'
-        }
-      });
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            ...config,
+            responseMimeType: config?.responseMimeType || 'application/json'
+          }
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`모델 ${model} 응답 시간 초과(25초)`)), 25000)
+        )
+      ]);
       console.log(`[Gemini] Model ${model} responded in ${Date.now() - startTime}ms`);
 
       if (response && response.text) {
@@ -127,7 +131,7 @@ function generateFallbackFeedback(
 }
 
 // 1. Health check
-app.all(['/api/health', '/api/health/'], (req, res) => {
+app.all(['/api/health', '/api/health/', '/health'], (req, res) => {
   res.json({
     status: 'ok',
     timestamp: Date.now(),
@@ -137,7 +141,7 @@ app.all(['/api/health', '/api/health/'], (req, res) => {
 });
 
 // 2. Gemini connection test (supports both GET and POST)
-app.all(['/api/gemini/test', '/api/gemini/test/'], async (req, res) => {
+app.all(['/api/gemini/test', '/api/gemini/test/', '/gemini/test'], async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({
@@ -147,8 +151,8 @@ app.all(['/api/gemini/test', '/api/gemini/test/'], async (req, res) => {
     }
 
     const result = await generateContentWithFallback(
-      '초등학생을 위한 따뜻한 한 줄 환영 인사를 30자 이내로 써주세요.',
-      { responseMimeType: 'text/plain' }
+      '초등학교 환영 인사 한 문장 (15자 이내):',
+      { responseMimeType: 'text/plain', maxOutputTokens: 40, temperature: 0.7 }
     );
     res.json({
       success: true,
@@ -164,6 +168,96 @@ app.all(['/api/gemini/test', '/api/gemini/test/'], async (req, res) => {
   }
 });
 
+// Helper to extract keywords and entities from a Korean sentence
+function extractSentenceEntities(sentence: string = ''): {
+  subject: string;
+  placeOrObject: string;
+  action: string;
+  keywords: string[];
+} {
+  const clean = (sentence || '').replace(/[.!?,"'“”‘’]/g, ' ').trim();
+  const words = clean.split(/\s+/).filter(w => w.length >= 2);
+  
+  // Filter out common Korean particles or stop words
+  const stopWords = new Set(['내가', '나는', '어느', '날에', '그때', '갑자기', '정말', '너무', '매우', '그리고', '하지만', '있었다', '했다', '보았다', '되었다', '나의', '우리']);
+  const meaningful = words.filter(w => !stopWords.has(w));
+
+  const subject = meaningful[0] || (words[0] || '주인공');
+  const placeOrObject = meaningful[1] || meaningful[0] || '신비한 공간';
+  const action = meaningful.slice(2).join(' ') || '특별한 일';
+
+  return {
+    subject,
+    placeOrObject,
+    action,
+    keywords: meaningful.slice(0, 5)
+  };
+}
+
+// 40+ diverse, imaginative first sentence seeds for elementary picture books
+const DIVERSE_FIRST_SENTENCES = [
+  {
+    title: '서랍 속 작은 문',
+    description: '평범한 내 방 책상 서랍 구석에서 은은한 금빛과 함께 손톱만 한 문이 딸깍 열렸다.',
+    preview: '숙제를 하려고 책상 서랍을 연 순간, 서랍 안쪽 구석에서 딸깍 소리와 함께 손톱만 한 황금색 문이 스르륵 열렸다.'
+  },
+  {
+    title: '말하는 파란 운동화',
+    description: '아침에 일어나 현관으로 나갔더니 내 낡은 파란 운동화가 하품을 하며 말을 걸었다.',
+    preview: '현관문을 나서려는데 신발장에 놓인 파란 운동화가 끄응 하품을 하더니 "오늘은 제발 흙탕물에 들어가지 마!"라고 소리쳤다.'
+  },
+  {
+    title: '냉장고 속 아기 북극곰',
+    description: '시원한 물을 마시려 냉장고 문을 열었더니 얼음 칸에 털북숭이 아기 북극곰이 앉아 있었다.',
+    preview: '한여름 무더위에 시원한 보리차를 꺼내려 냉장고를 열었더니, 냉동실 얼음틀 위에 눈처럼 하얀 아기 북극곰이 웅크리고 앉아 있었다.'
+  },
+  {
+    title: '구름을 낚는 낚싯대',
+    description: '할아버지 다락방 구석에서 먼지 쌓인 낚싯대를 집어 들었더니 낚싯줄이 창밖 하늘 구름으로 솟구쳤다.',
+    preview: '할아버지 댁 다락방에서 찾은 무지갯빛 낚싯대를 옥상에서 휘둘렀더니, 낚싯바늘이 뭉게구름 한 조각을 솜사탕처럼 낚아챘다.'
+  },
+  {
+    title: '거꾸로 가는 교실 시계',
+    description: '교실 벽걸이 시계 초침이 갑자기 거꾸로 빠르게 돌더니 창밖 풍경이 어제로 돌아가기 시작했다.',
+    preview: '수학 시험지를 받는 순간 교실 시계 초침이 반대 방향으로 째깍째깍 돌더니, 교실 안 모든 친구들이 뒤로 걷기 시작했다.'
+  },
+  {
+    title: '사물함 속 우주 신호',
+    description: '체육 시간 후 사물함을 열었더니 초록색 전파 신호와 함께 외계 행성 지도가 펼쳐졌다.',
+    preview: '운동장 체육 수업이 끝나고 4학년 2반 사물함을 열었을 때, 체육복 속에서 삐비빅 소리를 내며 밤하늘 별자리 암호가 깜빡였다.'
+  },
+  {
+    title: '투명해진 얼룩고양이',
+    description: '아침밥을 주려는데 우리 집 얼룩고양이의 꼬리부터 서서히 유리처럼 투명해지고 있었다.',
+    preview: '아침에 "나비야" 하고 불렀더니 방 한가운데서 방울 소리만 짤랑거릴 뿐, 고양이의 발자국만 퐁퐁 찍히고 몸은 투명인간처럼 사라져 있었다.'
+  },
+  {
+    title: '비 오는 날의 무지개 우산',
+    description: '빗속에서 우산을 활짝 펼치자 빗방울이 바닥에 닿는 대신 달콤한 사탕 알갱이로 변해 튀어 올랐다.',
+    preview: '장마철 비구름이 잔뜩 낀 날 노란 우산을 팡 펼쳤더니, 우산살 사이로 보랏빛 음악 소리가 흘러나오며 발밑이 둥실 떠올랐다.'
+  },
+  {
+    title: '도서관의 숨겨진 책',
+    description: '도서관 맨 구석 서가에서 표지가 없는 두꺼운 책을 꺼내자 내 이름이 적힌 비밀 페이지가 나타났다.',
+    preview: '학교 도서관 먼지 쌓인 옛날 서가에서 책 한 권을 툭 건드렸더니, 책장 사이에서 날개 달린 글자들이 나비처럼 날아올랐다.'
+  },
+  {
+    title: '시간을 멈추는 분필',
+    description: '칠판 밑에 떨어진 형광빛 분필로 바닥에 동그라미를 그렸더니 운동장의 모든 사람이 멈췄다.',
+    preview: '칠판 밑에 굴러다니던 오색 분필을 주워 손에 쥐는 순간, 귓가에 맴돌던 모든 소리가 뚝 끊기며 온 세상의 시간이 멈춰 섰다.'
+  },
+  {
+    title: '그림 속으로 들어간 크레파스',
+    description: '도화지에 문을 그렸더니 종이 속 문고리가 덜컹거리며 진짜로 열리기 시작했다.',
+    preview: '미술 시간에 도화지에 숲속 오솔길을 그렸는데, 갈색 크레파스 자국을 따라 솔바람이 불어오더니 내 손가락이 그림 속으로 쑥 빨려 들어갔다.'
+  },
+  {
+    title: '가로등 밑 꼬마 도깨비',
+    description: '어둑한 저녁 골목길에서 가로등 전구 불빛을 숟가락으로 떠먹고 있는 꼬마를 만났다.',
+    preview: '학원이 끝나고 돌아오던 어둑한 저녁, 전봇대 꼭대기에서 노란 전등 불빛을 숟가락으로 떠먹고 있는 뿔 달린 꼬마를 목격했다.'
+  }
+];
+
 // 2-1. Picture Book Story Ideas Generation (학생의 첫 문장 및 이전 단계 설정에 맞춘 3가지 아이디어 예시 생성)
 // Dynamic fallback for story ideas tailored to student's first sentence
 function generateDynamicStoryIdeas(
@@ -172,169 +266,177 @@ function generateDynamicStoryIdeas(
   grade: number = 4
 ): Array<{ id: string; title: string; description: string; preview: string }> {
   const fs = (currentData.firstSentence || '').trim();
-  const shortFs = fs.length > 25 ? `${fs.slice(0, 25)}...` : fs;
 
-  if (fs) {
-    if (stage === 'character') {
-      return [
-        {
-          id: 'dyn_ch_1',
-          title: '첫 문장의 주인공',
-          description: `"${shortFs}"의 사건을 직접 마주한 용기 있고 호기심 많은 주인공이에요.`,
-          preview: `그 순간 자리에 서 있던 주인공은 평소 호기심이 많고 무슨 일이든 끝까지 파헤치는 특별한 성격을 지니고 있었다.`
-        },
-        {
-          id: 'dyn_ch_2',
-          title: '비밀을 품은 친구',
-          description: `첫 문장의 상황에 대해 남모를 단서를 품고 있는 신비로운 캐릭터예요.`,
-          preview: `겉모습은 평범해 보이지만 첫 문장에서 벌어진 일의 비밀을 가슴속에 간직한 채 조용히 관찰하던 주인공이었다.`
-        },
-        {
-          id: 'dyn_ch_3',
-          title: '엉뚱한 해결사',
-          description: `기발한 상상력으로 상황을 흥미진진하게 이끌어갈 유쾌한 주인공이에요.`,
-          preview: `엉뚱한 생각으로 주변을 놀라게 하지만 위기의 순간마다 번뜩이는 아이디어를 내는 매력적인 주인공이었다.`
-        }
-      ];
-    }
-    if (stage === 'goal') {
-      return [
-        {
-          id: 'dyn_gl_1',
-          title: '진실 밝히기',
-          description: `"${shortFs}"에서 벌어진 신기한 일의 원인을 알아내려는 목표예요.`,
-          preview: `방금 일어난 기묘한 사건의 비밀을 풀고 잃어버린 소중한 것을 제자리로 되돌려놓는 것이었다.`
-        },
-        {
-          id: 'dyn_gl_2',
-          title: '모험과 탐험',
-          description: `첫 문장의 사건을 계기로 미지의 세계로 당당하게 나아가는 목표예요.`,
-          preview: `두려움을 이겨내고 한 번도 가보지 못한 새로운 세상으로 나아가 꿈꾸던 소망을 이루는 것이었다.`
-        },
-        {
-          id: 'dyn_gl_3',
-          title: '친구와의 약속',
-          description: `첫 문장의 상황에서 위험에 빠진 존재를 구하거나 약속을 지키는 목표예요.`,
-          preview: `소중한 친구를 안전하게 구하고 가슴속에 품은 따뜻한 약속을 끝까지 지켜내는 것이었다.`
-        }
-      ];
-    }
-    if (stage === 'obstacle') {
-      return [
-        {
-          id: 'dyn_ob_1',
-          title: '갑작스러운 돌발 상황',
-          description: `"${shortFs}" 이후 예상치 못한 장애물이 나타나 앞을 가로막는 상황이에요.`,
-          preview: `목표를 향해 나아가려는 순간, 거센 돌풍과 함께 아무도 예상하지 못했던 거대한 장벽이 눈앞을 가로막았다.`
-        },
-        {
-          id: 'dyn_ob_2',
-          title: '방해하는 훼방꾼',
-          description: `첫 문장의 비밀을 빼앗으려는 짓궂은 상대가 나타나는 전개예요.`,
-          preview: `비밀을 호시탐탐 노리던 짓궂은 방해꾼이 나타나 중요한 단서를 낚아채 달아나버렸다.`
-        },
-        {
-          id: 'dyn_ob_3',
-          title: '마음의 두려움과 오해',
-          description: `스스로의 두려움이나 친구와의 오해로 갈등이 깊어지는 상황이에요.`,
-          preview: `시간이 촉박해질수록 자꾸만 실수가 이어졌고, 친구와의 사소한 오해까지 겹쳐 마음이 무거워졌다.`
-        }
-      ];
-    }
-    if (stage === 'helper') {
-      return [
-        {
-          id: 'dyn_hp_1',
-          title: '믿음직한 조력자',
-          description: `위기의 순간 지혜로운 조언을 건네는 든든한 친구예요.`,
-          preview: `위기의 순간 어디선가 나타난 작은 친구가 따뜻한 손을 내밀며 결정적인 힌트를 속삭여주었다.`
-        },
-        {
-          id: 'dyn_hp_2',
-          title: '신비한 마법 도구',
-          description: `첫 문장의 상황을 뒤집을 수 있는 특별한 물건이에요.`,
-          preview: `주머니 깊숙한 곳에서 발견한 낡은 나침반이 반짝이는 빛을 내뿜으며 올바른 방향을 가리키기 시작했다.`
-        },
-        {
-          id: 'dyn_hp_3',
-          title: '숨겨진 나의 용기',
-          description: `어려움 속에서 스스로 깨달은 내면의 힘이에요.`,
-          preview: `도망치고 싶던 순간, 포기하지 않겠다고 다짐하자 마음 깊은 곳에서 뜨거운 용기가 솟아올랐다.`
-        }
-      ];
-    }
-    if (stage === 'resolution') {
-      return [
-        {
-          id: 'dyn_rs_1',
-          title: '기지와 협동으로 해결',
-          description: `친구와 힘을 합쳐 번뜩이는 아이디어로 시련을 극복하는 장면이에요.`,
-          preview: `친구와 눈빛을 교환한 주인공은 기발한 작전을 펼쳐 방해물을 슬기롭게 뛰어넘었다.`
-        },
-        {
-          id: 'dyn_rs_2',
-          title: '진심 어린 설득',
-          description: `싸우지 않고 진심을 전해 갈등을 눈 녹듯 푸는 장면이에요.`,
-          preview: `솔직한 마음을 담은 따뜻한 한마디를 건네자, 굳게 닫혀 있던 상대방의 마음이 사르르 열렸다.`
-        },
-        {
-          id: 'dyn_rs_3',
-          title: '용기 있는 도전',
-          description: `두려움을 딛고 온 힘을 다해 문제를 해결하는 통쾌한 장면이에요.`,
-          preview: `심호흡을 한 번 크게 내쉬고 온 힘을 다해 손을 뻗어 마침내 엉킨 문제를 말끔히 풀어냈다.`
-        }
-      ];
-    }
-    if (stage === 'ending') {
-      return [
-        {
-          id: 'dyn_ed_1',
-          title: '따뜻한 감동의 마무리',
-          description: `모험이 끝나고 마음이 한 뼘 더 자란 훈훈한 결말이에요.`,
-          preview: `모든 모험이 끝나고 일상으로 돌아왔지만, 주인공의 가슴속에는 잊을 수 없는 소중한 추억과 우정이 영원히 남게 되었다.`
-        },
-        {
-          id: 'dyn_ed_2',
-          title: '새로운 모험의 여운',
-          description: `또 다른 신비로운 모험을 예고하며 미소 짓는 결말이에요.`,
-          preview: `창밖의 노을을 바라보며 미소를 지었다. 내일은 또 어떤 흥미진진한 비밀이 나를 기다리고 있을까?`
-        },
-        {
-          id: 'dyn_ed_3',
-          title: '유쾌하고 흐뭇한 반전',
-          description: `친구들과 함께 활짝 웃으며 행복하게 끝나는 결말이에요.`,
-          preview: `서로의 얼굴을 마주 보며 까르르 웃음을 터뜨렸다. 오늘은 우리 모두에게 평생 잊지 못할 가장 특별한 날이었다.`
-        }
-      ];
-    }
+  if (stage === 'firstSentence' || !fs) {
+    // Return 3 randomly shuffled items from diverse first sentences
+    const shuffled = [...DIVERSE_FIRST_SENTENCES].sort(() => 0.5 - Math.random());
+    return shuffled.slice(0, 3).map((item, idx) => ({
+      id: `dyn_fs_${idx + 1}_${Date.now()}`,
+      title: item.title,
+      description: item.description,
+      preview: item.preview
+    }));
   }
 
+  const entities = extractSentenceEntities(fs);
+  const target = entities.subject || '첫 문장의 소재';
+  const place = entities.placeOrObject || '신비한 배경';
+
+  if (stage === 'character') {
+    return [
+      {
+        id: `dyn_ch_1_${Date.now()}`,
+        title: `${target}의 비밀을 밝히는 탐험가`,
+        description: `첫 문장에 나타난 ${target}의 사건을 마주하고 용기 있게 진실을 파헤치는 주인공이에요.`,
+        preview: `"${fs}" 그 순간 현장에 서 있던 주인공은 두 눈을 반짝이며, 방금 일어난 ${target}의 이상한 비밀을 끝까지 밝혀내기로 결심했다.`
+      },
+      {
+        id: `dyn_ch_2_${Date.now()}`,
+        title: `${target}과 얽힌 엉뚱한 친구`,
+        description: `기발한 상상력과 엉뚱한 행동으로 ${target}과 유쾌하게 얽혀드는 특별한 주인공이에요.`,
+        preview: `모두가 놀라 어리둥절할 때, 평소 엉뚱하기로 유명한 주인공은 ${target}을(를) 향해 반갑게 손을 흔들며 다가갔다.`
+      },
+      {
+        id: `dyn_ch_3_${Date.now()}`,
+        title: `${target}의 마음을 듣는 아이`,
+        description: `${target}의 상황을 따뜻한 공감과 지혜로 감싸 안아주는 다정한 주인공이에요.`,
+        preview: `주인공은 ${target}의 모습을 가만히 지켜보며, 남들은 모르는 외로움이나 간절한 소망이 있을 거라 생각하고 조용히 곁을 지켰다.`
+      }
+    ];
+  }
+
+  if (stage === 'goal') {
+    return [
+      {
+        id: `dyn_gl_1_${Date.now()}`,
+        title: `${target}의 진짜 이유 밝혀내기`,
+        description: `첫 문장에서 벌어진 ${target}의 신기한 일의 원인을 밝혀 안전하게 원래대로 돌려놓는 목표예요.`,
+        preview: `방금 벌어진 ${target}의 기묘한 소동의 원인을 찾아내고, 뒤죽박죽된 상황을 말끔히 원래대로 되돌려놓는 것이었다.`
+      },
+      {
+        id: `dyn_gl_2_${Date.now()}`,
+        title: `${place}을(를) 향한 두근두근 모험`,
+        description: `첫 문장을 시작으로 ${place} 너머 미지의 세계로 당당하게 모험을 떠나는 목표예요.`,
+        preview: `두려움을 털어내고 ${target}이(가) 가리키는 ${place} 너머 미지의 세상으로 나아가 감춰진 보물을 찾는 것이었다.`
+      },
+      {
+        id: `dyn_gl_3_${Date.now()}`,
+        title: `${target}과 나눈 소중한 약속`,
+        description: `첫 문장에서 마주한 ${target}을(를) 돕거나 서로에게 한 약속을 지켜내는 따뜻한 목표예요.`,
+        preview: `위험에 처한 ${target}을(를) 지켜주고, 마음속 깊이 약속했던 소중한 다짐을 반드시 지켜내는 것이었다.`
+      }
+    ];
+  }
+
+  if (stage === 'obstacle') {
+    return [
+      {
+        id: `dyn_ob_1_${Date.now()}`,
+        title: `${target}이(가) 사라지거나 굳어버린 위기`,
+        description: `첫 문장의 ${target}과 관련된 중요한 단서가 갑자기 엉키거나 사라지는 돌발 상황이에요.`,
+        preview: `한 걸음 다가서려는 찰나, ${target} 주위로 이상한 안개가 자욱하게 피어오르더니 눈 깜짝할 사이에 단서가 사라져버렸다.`
+      },
+      {
+        id: `dyn_ob_2_${Date.now()}`,
+        title: `${target}을(를) 노리는 짓궂은 방해꾼`,
+        description: `첫 문장의 비밀을 가로채거나 엉망으로 만들려는 훼방꾼이 나타나는 전개예요.`,
+        preview: `${target}의 비밀을 호시탐탐 엿보던 짓궂은 경쟁자가 갑자기 끼어들어 앞길을 가로막고 훼방을 놓기 시작했다.`
+      },
+      {
+        id: `dyn_ob_3_${Date.now()}`,
+        title: `시간 부족과 서툰 마음`,
+        description: `시간이 얼마 남지 않은 상황에서 실수와 오해가 겹치며 커지는 위기예요.`,
+        preview: `${target}을(를) 해결할 시간이 얼마 남지 않았는데, 마음이 급해져 사소한 실수를 저지르고 말았다.`
+      }
+    ];
+  }
+
+  if (stage === 'helper') {
+    return [
+      {
+        id: `dyn_hp_1_${Date.now()}`,
+        title: `${target}을(를) 잘 아는 의외의 친구`,
+        description: `위기의 순간 나타나 ${target}에 얽힌 결정적인 힌트를 건네주는 든든한 조력자예요.`,
+        preview: `절망하려던 순간, 옆에서 조용히 지켜보던 친구가 ${target}에 관한 비밀이 적힌 낡은 수첩을 건네주었다.`
+      },
+      {
+        id: `dyn_hp_2_${Date.now()}`,
+        title: `${place}에서 발견한 특별한 도구`,
+        description: `첫 문장의 배경이나 주변에서 발견한 신비로운 물건이 힘을 발휘하는 순간이에요.`,
+        preview: `주머니 속에 우연히 넣어두었던 작은 물건이 ${target}의 기운에 반응하며 은은한 빛을 뿜어내기 시작했다.`
+      },
+      {
+        id: `dyn_hp_3_${Date.now()}`,
+        title: `포기하지 않는 마음과 용기`,
+        description: `어려움 속에서 스스로 깨달은 내면의 용기와 친구들의 응원이에요.`,
+        preview: `"할 수 있어!" 친구들의 응원 소리에 힘을 얻은 주인공은 마음 깊은 곳에서 뜨거운 용기를 끌어올렸다.`
+      }
+    ];
+  }
+
+  if (stage === 'resolution') {
+    return [
+      {
+        id: `dyn_rs_1_${Date.now()}`,
+        title: `기발한 아이디어로 ${target} 문제 해결`,
+        description: `남들이 생각하지 못한 참신한 기지와 협동으로 위기를 멋지게 돌파하는 장면이에요.`,
+        preview: `주인공은 번뜩이는 재치를 발휘해 ${target}의 약점을 지혜롭게 활용했고, 친구들과 힘을 합쳐 단숨에 위기를 극복했다.`
+      },
+      {
+        id: `dyn_rs_2_${Date.now()}`,
+        title: `${target}에게 건넨 따뜻한 진심`,
+        description: `싸움이 아닌 진심 어린 소통으로 갈등을 사르르 녹여내는 감동적인 해결 장면이에요.`,
+        preview: `주인공이 떨리는 손으로 ${target}에게 따뜻한 한마디를 건네자, 차갑게 굳어 있던 방해물이 눈 녹듯 사라졌다.`
+      },
+      {
+        id: `dyn_rs_3_${Date.now()}`,
+        title: `온 힘을 다한 극적인 역전`,
+        description: `마지막 순간까지 포기하지 않고 온 힘을 쏟아 기적을 만들어내는 통쾌한 장면이에요.`,
+        preview: `마지막 1초를 남겨두고 온 힘을 다해 몸을 날려 마침내 ${target}의 스위치를 안전하게 되돌려놓았다.`
+      }
+    ];
+  }
+
+  // ending
   return [
     {
-      id: 'open_1',
-      title: '신비한 일상 판타지',
-      description: '평범한 하루 속에 마법 같은 일이 벌어지는 호기심 가득한 오프닝이에요.',
-      preview: '비가 그친 오후, 낡은 책상 서랍 구석에서 은은한 빛과 함께 작은 문이 딸깍 열렸다.'
+      id: `dyn_ed_1_${Date.now()}`,
+      title: `${target}과 함께 만든 훈훈한 결말`,
+      description: `모험이 끝나고 일상으로 돌아왔지만 주인공의 마음이 한 뼘 더 자란 감동의 마무리예요.`,
+      preview: `모든 소동이 끝나고 평화가 찾아왔지만, 주인공의 가슴속에는 ${target}과 함께 나눈 기적 같은 추억이 보석처럼 빛났다.`
     },
     {
-      id: 'open_2',
-      title: '유쾌하고 엉뚱한 반전',
-      description: '예상치 못한 사건으로 웃음과 재미를 선사하는 오프닝이에요.',
-      preview: '아침에 일어났더니, 침대 머리맡에 놓인 내 파란색 운동화가 사람처럼 하품을 하고 있었다.'
+      id: `dyn_ed_2_${Date.now()}`,
+      title: `내일을 기대하게 하는 설레는 결말`,
+      description: `또 다른 신비로운 모험을 암시하며 기분 좋은 미소를 남기는 여운 가득한 결말이에요.`,
+      preview: `창밖을 바라보며 살며시 미소를 지었다. 내일 아침에는 또 어떤 신나는 일이 나를 기다리고 있을까?`
     },
     {
-      id: 'open_3',
-      title: '두근두근 모험의 시작',
-      description: '비밀 통로나 신비한 메시지를 발견하며 시작되는 오프닝이에요.',
-      preview: '학교 운동장 시계탑 뒤편에서 지금까지 아무도 보지 못했던 은빛 비밀 계단이 모습을 드러냈다.'
+      id: `dyn_ed_3_${Date.now()}`,
+      title: `다 함께 웃음을 터뜨리는 유쾌한 결말`,
+      description: `모두가 한바탕 웃으며 유쾌하고 행복하게 책장을 덮는 마무리예요.`,
+      preview: `서로의 얼굴을 쳐다보며 까르르 웃음을 터뜨렸다. 오늘은 우리 모두에게 평생 잊지 못할 가장 특별한 날이었다.`
     }
   ];
 }
 
 // 2-1. Picture Book Story Ideas Generation (학생의 첫 문장 및 이전 단계 설정에 맞춘 3가지 아이디어 예시 생성)
-app.post(['/api/gemini/story-ideas', '/api/gemini/story-ideas/'], async (req, res) => {
+app.all(['/api/gemini/story-ideas', '/api/gemini/story-ideas/', '/gemini/story-ideas'], async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
   try {
-    const { stage, currentData = {}, grade = 6, topicTitle } = req.body;
+    const payload = req.method === 'GET' ? req.query : req.body;
+    const {
+      stage = 'firstSentence',
+      currentData = {},
+      grade = 6,
+      topicTitle = '',
+      studentName = '',
+      userHint = '',
+      randomSeed = Date.now()
+    } = payload || {};
 
     const stageNames: Record<string, string> = {
       firstSentence: '그림책의 첫 문장 (독자의 호기심을 확 사로잡는 매력적인 첫 문장)',
@@ -347,24 +449,26 @@ app.post(['/api/gemini/story-ideas', '/api/gemini/story-ideas/'], async (req, re
     };
 
     const targetStageName = stageNames[stage] || stage;
-    const studentFirstSentence = currentData.firstSentence ? currentData.firstSentence.trim() : '';
+    const studentFirstSentence = currentData.firstSentence ? String(currentData.firstSentence).trim() : '';
 
     let prompt = '';
 
     if (stage === 'firstSentence') {
       prompt = `당신은 대한민국 최고의 초등학교 그림책 및 동화 창작 전문 작가이자 국어 지도 교사입니다.
-초등학교 ${grade}학년 학생이 그림책을 쓰기 위해 '이야기를 여는 첫 문장' 아이디어를 얻고자 합니다.
-${topicTitle ? `[학생이 고른 주제]: ${topicTitle}` : ''}
-${studentFirstSentence ? `[학생의 기존 생각/단어]: "${studentFirstSentence}"` : ''}
+초등학교 ${grade}학년 학생 작가 (${studentName ? `${studentName} 학생` : '어린이 작가'})가 그림책을 쓰기 위해 '이야기를 여는 첫 문장' 아이디어를 얻고자 합니다.
+${topicTitle ? `[학생이 고른 주제]: "${topicTitle}"` : ''}
+${userHint ? `[학생이 원하는 특별한 키워드/분위기]: "${userHint}"` : ''}
+${studentFirstSentence ? `[학생의 기존 생각이나 단어]: "${studentFirstSentence}"` : ''}
+[요청 고유 시드]: ${randomSeed}
 
-★★ [절대 원칙 - 천편일률적 클리셰 금지 및 다양성 극대화] ★★
-1. **절대로 모든 학생에게 동일하거나 뻔한 동화 클리셰(흔한 다람쥐 도토리, 숲속 요정, 뻔한 먹구름 등)를 반복해서 추천하지 마세요.**
-2. 독자(친구들, 부모님)의 눈을 단숨에 사로잡고 "어? 다음엔 무슨 일이 일어나지?" 하고 호기심이 폭발하는 참신하고 기발한 첫 문장 3가지를 만들어주세요.
-3. 3가지 첫 문장은 서로 완전히 다른 장르와 분위기를 띠어야 합니다:
-   - 아이디어 1 (기발한 일상 판타지): 평범한 일상(교실, 방, 운동장, 냉장고, 가방, 빗방울 등)에 갑자기 마법 같은 일이 벌어지는 신비로운 오프닝
-   - 아이디어 2 (유쾌하고 엉뚱한 유머/반전): 예상치 못한 인물이나 사물의 행동, 엉뚱한 상황으로 웃음을 터뜨리는 오프닝
-   - 아이디어 3 (두근두근 모험/미스터리/SF): 비밀 통로, 시간 여행, 우주, 신비한 소리나 암호 등 가슴 뛰는 모험의 오프닝
-4. 초등학교 ${grade}학년 어린이 눈높이에 맞추어 이해하기 쉽고 바로 상상이 펼쳐지는 문장이어야 합니다.
+★★ [절대 원칙 - 천편일률적 클리셰 금지 및 무한한 창의적 다양성] ★★
+1. **절대로 모든 학생에게 동일하거나 뻔한 동화 클리셰(흔한 다람쥐 도토리, 숲속 요정, 뻔한 먹구름 등)를 반복하지 마세요.**
+2. ${studentName ? `${studentName} 학생만을 위한` : '이 어린이만을 위한'} 지금 막 떠오른 듯 신선하고 독창적인 3가지 첫 문장을 제안하세요.
+3. 3가지 첫 문장은 서로 완전히 다른 장르와 색깔을 지녀야 합니다:
+   - 아이디어 1 (기발한 일상 판타지/마법): 일상 속 익숙한 물건이나 공간에 갑자기 마법 같은 일이 펼쳐지는 오프닝
+   - 아이디어 2 (유쾌하고 엉뚱한 반전/유머): 예상치 못한 인물이나 사물의 엉뚱한 행동으로 웃음을 터뜨리는 오프닝
+   - 아이디어 3 (두근두근 모험/미스터리/SF): 비밀 통로, 미지의 신호, 시간 여행 등 가슴 뛰는 모험의 오프닝
+4. 초등학교 ${grade}학년 눈높이에 맞아 즉시 머릿속에 그림이 선명하게 그려지는 생생한 문장이어야 합니다.
 
 반드시 다음 JSON 형식으로만 응답해 주세요 (코드블록 마크다운 제외):
 {
@@ -373,19 +477,19 @@ ${studentFirstSentence ? `[학생의 기존 생각/단어]: "${studentFirstSente
     {
       "id": "idea_1",
       "title": "호기심을 끄는 제목 (12자 이내)",
-      "description": "이 첫 문장이 왜 매력적인지 아이에게 설명 (친절한 해요체, 1~2문장)",
+      "description": "이 첫 문장이 왜 매력적인지 아이에게 다정하게 설명 (친절한 해요체, 1~2문장)",
       "preview": "학생이 그대로 선택하거나 조금만 바꿔 쓸 수 있는 완성도 높은 첫 문장"
     },
     {
       "id": "idea_2",
       "title": "호기심을 끄는 제목 (12자 이내)",
-      "description": "이 첫 문장이 왜 매력적인지 아이에게 설명 (친절한 해요체, 1~2문장)",
+      "description": "이 첫 문장이 왜 매력적인지 아이에게 다정하게 설명 (친절한 해요체, 1~2문장)",
       "preview": "학생이 그대로 선택하거나 조금만 바꿔 쓸 수 있는 완성도 높은 첫 문장"
     },
     {
       "id": "idea_3",
       "title": "호기심을 끄는 제목 (12자 이내)",
-      "description": "이 첫 문장이 왜 매력적인지 아이에게 설명 (친절한 해요체, 1~2문장)",
+      "description": "이 첫 문장이 왜 매력적인지 아이에게 다정하게 설명 (친절한 해요체, 1~2문장)",
       "preview": "학생이 그대로 선택하거나 조금만 바꿔 쓸 수 있는 완성도 높은 첫 문장"
     }
   ]
@@ -401,27 +505,26 @@ ${studentFirstSentence ? `[학생의 기존 생각/단어]: "${studentFirstSente
       if (currentData.ending) contextDesc += `\n- 6. 결말: "${currentData.ending}"`;
 
       prompt = `당신은 초등학교 그림책 창작 전문 동화 작가이자 국어 지도 교사입니다.
-초등학교 ${grade}학년 학생이 자신의 그림책을 만들기 위해 이야기 씨앗을 심고 있습니다.
+초등학교 ${grade}학년 학생 작가 (${studentName ? `${studentName} 학생` : '어린이 작가'})가 자신의 그림책을 만들기 위해 이야기 씨앗을 심고 있습니다.
 
 지금 작성할 단계: [${targetStageName}]
 
 [현재까지 학생이 확정한 이야기 내용]:
 ${contextDesc || '(아직 앞 단계 내용이 없습니다.)'}
+${userHint ? `[학생이 원하는 특별한 키워드/아이디어]: "${userHint}"` : ''}
+[요청 고유 시드]: ${randomSeed}
 
-★★ [가장 중요한 핵심 중심축 지침] ★★
+★★ [가장 중요한 핵심 중심축 지침 - 학생의 첫 문장 절대 밀착] ★★
 1. **[학생의 첫 문장]을 이야기의 절대적인 세계관 중심축(Anchor)으로 삼으세요!**
    - 학생의 첫 문장: "${studentFirstSentence || '첫 문장 미작성'}"
-   ${studentFirstSentence ? `- 학생이 작성한 고유한 첫 문장의 구체적인 소재, 단어, 공간, 인물 힌트, 분위기, 세계관을 100% 반영해야 합니다.
-   - [적용 예시]:
-     * 첫 문장이 "자전거 페달을 세게 밟았더니 하늘로 날아올랐다"라면: 추천하는 [${targetStageName}]은 반드시 날아다니는 자전거, 하늘 구름길, 바람의 세계관과 필연적으로 맞물려야 합니다.
-     * 첫 문장이 "우리 집 냉장고 문을 열었더니 펭귄이 아이스크림을 먹고 있었다"라면: 추천하는 [${targetStageName}]은 반드시 냉장고 속 얼음 세상, 펭귄, 차가운 비밀과 맞물려야 합니다.
-     * 첫 문장이 "교실 창밖으로 거대한 분홍빛 고래가 헤엄쳐 지나갔다"라면: 추천하는 [${targetStageName}]은 분홍빛 고래, 하늘 바다, 교실 속 비밀과 맞물려야 합니다.` : '- 첫 문장이 아직 없다면, 초등학생들이 흥미를 느낄 만한 다채롭고 참신한 아이디어를 제안해 주세요.'}
-2. **절대로 모든 학생에게 똑같은 동화 클리셰(무관한 아기 다람쥐 도토리, 숲속 요정, 뻔한 먹구름 등)를 반복해서 추천하지 마세요.** 학생의 첫 문장과 무관한 제안은 엄격히 금지됩니다.
-3. 3가지 아이디어는 모두 첫 문장과 긴밀히 연결되되, 전개 방향을 다르게 하세요:
-   - 아이디어 1 (신비로운 모험/판타지): 첫 문장의 비밀을 찾아 떠나는 흥미진진한 전개
-   - 아이디어 2 (기발하고 엉뚱한 유머/반전): 첫 문장의 상황에서 터져 나오는 유쾌한 소동과 반전
-   - 아이디어 3 (따뜻한 감동/우정/성장): 첫 문장의 사건이나 인물과 교감하며 성장하는 포근한 전개
-4. 각 제안의 'preview'는 초등학교 ${grade}학년 어린이가 그대로 선택하거나 자신의 생각대로 쉽게 수정할 수 있는 완성도 높은 자연스러운 구체적 문장이어야 합니다.
+   ${studentFirstSentence ? `- 학생이 작성한 위 첫 문장의 고유한 소재, 어휘, 배경 공간, 등장물, 상황을 100% 반영해야 합니다.
+   - 첫 문장에 나온 사물이나 사건과 전혀 무관한 뻔한 이야기(숲속 요정, 뻔한 아기 다람쥐 등)를 추천하면 학생의 글쓰기 흐름이 깨지므로 엄격히 금지합니다.
+   - 추천하는 3가지 아이디어는 모두 첫 문장의 사건이나 인물과 필연적으로 이어져야 합니다.` : '- 첫 문장이 아직 없다면, 초등학생들이 흥미를 느낄 만한 다채롭고 참신한 아이디어를 제안해 주세요.'}
+2. 3가지 아이디어는 모두 동일한 첫 문장을 기반으로 하되, 전개 방향과 색깔을 서로 완전히 다르게 하세요:
+   - 아이디어 1 (신비로운 모험/판타지): 첫 문장의 비밀이나 수수께끼를 찾아 나서는 흥미진진한 전개
+   - 아이디어 2 (유쾌하고 엉뚱한 유머/반전): 첫 문장의 상황에서 터져 나오는 웃음과 기상천외한 반전
+   - 아이디어 3 (따뜻한 감동/우정/성장): 첫 문장의 존재와 교감하며 마음이 따뜻해지는 감동 전개
+3. 각 제안의 'preview'는 초등학교 ${grade}학년 어린이가 그대로 선택하거나 자신의 생각대로 쉽게 수정할 수 있는 완성도 높은 자연스러운 구체적 문장이어야 합니다.
 
 반드시 다음 JSON 형식으로만 응답해 주세요 (코드블록 마크다운 제외):
 {
@@ -450,16 +553,36 @@ ${contextDesc || '(아직 앞 단계 내용이 없습니다.)'}
     }
 
     try {
+      console.log(`[Story Ideas] Generating ideas for stage=${stage}, student=${studentName}, firstSentence="${studentFirstSentence.slice(0, 30)}"`);
       const response = await generateContentWithFallback(prompt, {
-        temperature: 0.95,
+        temperature: 1.0,
         topP: 0.95
       });
       const parsed = parseJsonSafely(response.text, {});
-      if (Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0) {
+
+      let list: any[] = [];
+      if (Array.isArray(parsed)) {
+        list = parsed;
+      } else if (parsed && typeof parsed === 'object') {
+        if (Array.isArray(parsed.suggestions)) list = parsed.suggestions;
+        else if (Array.isArray(parsed.ideas)) list = parsed.ideas;
+        else if (Array.isArray(parsed.recommendations)) list = parsed.recommendations;
+        else if (Array.isArray(parsed.data)) list = parsed.data;
+        else if (Array.isArray(parsed.items)) list = parsed.items;
+      }
+
+      if (list.length > 0) {
+        const formatted = list.slice(0, 3).map((item, idx) => ({
+          id: item.id || `idea_${idx + 1}_${Date.now()}`,
+          title: item.title || `아이디어 ${idx + 1}`,
+          description: item.description || '',
+          preview: item.preview || item.text || item.content || ''
+        }));
+
         return res.json({
           success: true,
           stage,
-          suggestions: parsed.suggestions,
+          suggestions: formatted,
           model: response.model
         });
       }

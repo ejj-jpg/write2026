@@ -89,6 +89,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onClose }) =
   const [firestoreTestResult, setFirestoreTestResult] = useState<FirestoreTestResult | null>(null);
   const [geminiTestResult, setGeminiTestResult] = useState<GeminiTestResult | null>(null);
   const [testingConnection, setTestingConnection] = useState<boolean>(false);
+  const [testingGeminiOnly, setTestingGeminiOnly] = useState<boolean>(false);
 
   // Password change form
   const [oldAdminPw, setOldAdminPw] = useState<string>('');
@@ -1008,38 +1009,43 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onClose }) =
               <div className="p-4 rounded-2xl border bg-[#FDFBF7] border-[#EADDCA] space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-extrabold text-[#2D2A26]">Gemini AI API</span>
-                  {geminiTestResult && (
-                    <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-2">
+                    {geminiTestResult && (
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
                         geminiTestResult.success ? 'bg-[#F0F7F4] text-[#5A8F7B]' : 'bg-rose-100 text-rose-800'
                       }`}>
                         {geminiTestResult.success ? `정상 (${geminiTestResult.latencyMs}ms)` : '실패'}
                       </span>
-                      {!geminiTestResult.success && (
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            setTestingConnection(true);
-                            try {
-                              const res = await testGeminiConnection();
-                              setGeminiTestResult(res);
-                            } finally {
-                              setTestingConnection(false);
-                            }
-                          }}
-                          className="text-[10px] font-bold text-[#A67C52] hover:underline"
-                        >
-                          다시 테스트
-                        </button>
-                      )}
-                    </div>
-                  )}
+                    )}
+                    <button
+                      type="button"
+                      disabled={testingGeminiOnly || testingConnection}
+                      onClick={async () => {
+                        setTestingGeminiOnly(true);
+                        try {
+                          const res = await testGeminiConnection();
+                          setGeminiTestResult(res);
+                        } finally {
+                          setTestingGeminiOnly(false);
+                        }
+                      }}
+                      className="text-[11px] font-bold px-2.5 py-1 bg-[#A67C52] hover:bg-[#8D6841] text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1 shadow-2xs"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${testingGeminiOnly ? 'animate-spin' : ''}`} />
+                      <span>{testingGeminiOnly ? '테스트 중...' : geminiTestResult ? '재검증' : 'AI 단독 테스트'}</span>
+                    </button>
+                  </div>
                 </div>
                 <p className="text-xs text-[#4A443F] leading-relaxed">
                   {geminiTestResult
                     ? `${geminiTestResult.message}${geminiTestResult.model ? ` (${geminiTestResult.model})` : ''}`
-                    : '테스트 실행 전입니다. [실시간 테스트 실행] 버튼을 눌러주세요.'}
+                    : '테스트 실행 전입니다. [AI 단독 테스트] 또는 상단 [전체 시스템 실시간 테스트 실행] 버튼을 눌러주세요.'}
                 </p>
+                {geminiTestResult && !geminiTestResult.success && geminiTestResult.error && (
+                  <p className="text-[11px] text-rose-600 font-mono bg-rose-50 p-2 rounded-lg border border-rose-200">
+                    오류 상세: {geminiTestResult.error}
+                  </p>
+                )}
               </div>
             </div>
           </div>

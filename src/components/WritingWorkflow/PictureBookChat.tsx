@@ -46,7 +46,7 @@ const STAGES: StageMeta[] = [
     title: '이야기를 여는 첫 문장',
     badge: '첫 문장',
     botPrompt: '반가워요, 작가님! 📖\n세상에 하나뿐인 멋진 그림책(동화책)을 만들기 위해 이야기 씨앗을 심어볼까요?\n먼저 책을 펼쳤을 때 독자의 호기심을 사로잡을 **첫 문장**을 적어보세요!',
-    placeholder: '예: 비가 쏟아지던 화요일 오후, 낡은 서랍 속에서 이상한 소리가 났다.',
+    placeholder: '예: 비가 그치자 낡은 책상 서랍 안쪽에서 손톱만 한 황금색 문이 스르륵 열렸다.',
     icon: '✨',
     color: '#5A8F7B'
   },
@@ -55,8 +55,8 @@ const STAGES: StageMeta[] = [
     stepNum: '1단계',
     title: '주인공',
     badge: '1. 주인공',
-    botPrompt: '정말 흥미진진한 시작이에요! ✨\n그렇다면 이 이야기의 중심에 설 **1. 주인공**은 누구인가요? 이름이나 생김새, 특별한 성격을 소개해 주세요.',
-    placeholder: '예: 밤하늘 별빛을 모으는 호기심 많은 아기 다람쥐 "도토리"',
+    botPrompt: '정말 흥미진진한 시작이에요! ✨\n그렇다면 이 첫 문장의 사건과 배경에 어울리는 **1. 주인공**은 누구인가요? 이름이나 생김새, 특별한 성격을 소개해 주세요.',
+    placeholder: '예: 첫 문장의 신비한 사건을 목격하고 호기심을 참지 못하는 주인공의 이름과 성격',
     icon: '🐿️',
     color: '#A67C52'
   },
@@ -65,8 +65,8 @@ const STAGES: StageMeta[] = [
     stepNum: '2단계',
     title: '하고 싶은 일 (목표)',
     badge: '2. 하고 싶은 일',
-    botPrompt: '주인공이 정말 매력적이에요! 🎯\n우리 주인공이 이번 모험에서 꼭 **2. 하고 싶은 일(간절한 소망이나 목표)**은 무엇인가요?',
-    placeholder: '예: 떨어진 은하수 조각을 찾아 밤하늘을 다시 반짝이게 되돌려놓고 싶어요.',
+    botPrompt: '주인공이 정말 매력적이에요! 🎯\n우리 주인공이 첫 문장의 상황을 바탕으로 꼭 **2. 하고 싶은 일(간절한 소망이나 목표)**은 무엇인가요?',
+    placeholder: '예: 이상한 일의 원인을 밝혀내거나, 소중한 무언가를 제자리로 되돌려놓으려는 목표',
     icon: '🌟',
     color: '#D48806'
   },
@@ -75,8 +75,8 @@ const STAGES: StageMeta[] = [
     stepNum: '3단계',
     title: '주인공을 방해하는 것 (시련/갈등)',
     badge: '3. 주인공을 방해하는 것',
-    botPrompt: '이야기에 긴장감이 더해지려면 시련이 필요해요! 🌪️\n주인공의 앞을 가로막거나 **3. 주인공을 방해하는 것(장애물, 악당, 무서운 자연환경 등)**은 무엇인가요?',
-    placeholder: '예: 길을 꽁꽁 얼리고 소용돌이바람을 일으키는 심술쟁이 먹구름 괴물',
+    botPrompt: '이야기에 긴장감이 더해지려면 시련이 필요해요! 🌪️\n주인공의 앞을 가로막거나 **3. 주인공을 방해하는 것(장애물, 훼방꾼, 갑작스러운 위기 등)**은 무엇인가요?',
+    placeholder: '예: 중요한 단서가 갑자기 사라지거나, 앞을 가로막는 방해꾼의 짓궂은 행동',
     icon: '⚡',
     color: '#C05621'
   },
@@ -85,8 +85,8 @@ const STAGES: StageMeta[] = [
     stepNum: '4단계',
     title: '주인공을 돕는 것 (조력자/도구)',
     badge: '4. 주인공을 돕는 것',
-    botPrompt: '어려움에 빠진 주인공에게 구원투수가 등장할 차례예요! 🤝\n주인공에게 용기를 주거나 **4. 주인공을 돕는 것(친구, 힌트, 신비한 마법 도구, 지혜)**은 무엇인가요?',
-    placeholder: '예: 어두운 밤길을 따스하게 비춰주는 길잡이 반딧불이 친구 "루미"',
+    botPrompt: '어려움에 빠진 주인공에게 구원투수가 등장할 차례예요! 🤝\n주인공에게 용기를 주거나 **4. 주인공을 돕는 것(친구, 힌트, 신비한 마법 도구, 번뜩이는 지혜)**은 무엇인가요?',
+    placeholder: '예: 위기의 순간 결정적인 힌트를 건네주는 든든한 친구나 우연히 발견한 도구',
     icon: '🪄',
     color: '#4D7D6B'
   },
@@ -96,7 +96,7 @@ const STAGES: StageMeta[] = [
     title: '해결과정 (위기 극복)',
     badge: '5. 해결과정',
     botPrompt: '가장 손에 땀을 쥐게 하는 클라이맥스예요! 🔥\n주인공이 지혜와 용기를 모아 어려움을 어떻게 극복하나요? **5. 해결과정**을 들려주세요.',
-    placeholder: '예: 친구와 손을 맞잡고 마음속 용기의 빛을 쏘아 먹구름을 따뜻하게 녹였어요.',
+    placeholder: '예: 기발한 재치를 발휘해 상대와 소통하거나, 친구와 힘을 합쳐 위기를 통쾌하게 극복한 과정',
     icon: '🌈',
     color: '#2B6CB0'
   },
@@ -106,7 +106,7 @@ const STAGES: StageMeta[] = [
     title: '결말 (마무리와 감동)',
     badge: '6. 결말',
     botPrompt: '드디어 그림책의 마지막 장이에요! 🏆\n모든 모험이 끝나고 어떤 따뜻하거나 놀라운 **6. 결말**을 맞이하나요? 주인공은 어떤 마음이 되었나요?',
-    placeholder: '예: 온 마을에 다시 별빛이 쏟아지고, 주인공의 가슴속에 커다란 용기가 자라났어요.',
+    placeholder: '예: 모험을 마치고 일상으로 돌아왔지만, 한 뼘 더 자란 마음으로 내일을 두근거리며 맞이하는 모습',
     icon: '🎉',
     color: '#5A8F7B'
   }
@@ -203,7 +203,13 @@ export const PictureBookChat: React.FC<PictureBookChatProps> = ({
         onFrameworkUpdate(currentContext);
       }
 
-      const generated = await requestStoryIdeas(currentStage.key, currentContext, student.grade, topicTitle);
+      const generated = await requestStoryIdeas(
+        currentStage.key,
+        currentContext,
+        student.grade,
+        topicTitle,
+        student.name
+      );
       setIdeas(generated);
     } catch (err) {
       console.warn('AI idea error:', err);

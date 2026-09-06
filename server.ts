@@ -48,29 +48,124 @@ function getGeminiClient() {
   return new GoogleGenAI({ apiKey });
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Safely extract first valid balanced JSON object or array from a string
+function extractFirstJson(str: string): string | null {
+  if (!str || typeof str !== 'string') return null;
+
+  const startObj = str.indexOf('{');
+  const startArr = str.indexOf('[');
+  let startIdx = -1;
+  let openChar = '{';
+  let closeChar = '}';
+
+  if (startObj !== -1 && (startArr === -1 || startObj < startArr)) {
+    startIdx = startObj;
+    openChar = '{';
+    closeChar = '}';
+  } else if (startArr !== -1) {
+    startIdx = startArr;
+    openChar = '[';
+    closeChar = ']';
+  } else {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = startIdx; i < str.length; i++) {
+    const c = str[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === '\\') {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (c === openChar) {
+        depth++;
+      } else if (c === closeChar) {
+        depth--;
+        if (depth === 0) {
+          return str.slice(startIdx, i + 1);
+        }
+      }
+    }
+  }
+  return null;
+}
+
 // Helper to safely parse JSON from model responses
 function parseJsonSafely(text: string, fallback: any = {}) {
   if (!text || typeof text !== 'string') return fallback;
+
+  // 1. Direct trimmed parse
+  const trimmed = text.trim();
   try {
-    const cleaned = text.trim()
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/i, '')
-      .trim();
-    return JSON.parse(cleaned);
-  } catch (e) {
-    const match = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-    if (match) {
+    return JSON.parse(trimmed);
+  } catch {}
+
+  // 2. Markdown code block extraction (```json ... ```)
+  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (codeBlockMatch && codeBlockMatch[1]) {
+    const block = codeBlockMatch[1].trim().replace(/,\s*([}\]])/g, '$1');
+    try {
+      return JSON.parse(block);
+    } catch {}
+    const extractedFromBlock = extractFirstJson(block);
+    if (extractedFromBlock) {
       try {
-        return JSON.parse(match[0]);
-      } catch (innerErr) {
-        console.warn('Regex JSON parse fallback failed:', innerErr);
-      }
+        return JSON.parse(extractedFromBlock.replace(/,\s*([}\]])/g, '$1'));
+      } catch {}
     }
-    return fallback;
   }
+
+  // 3. Balanced brace/bracket extraction (prevents trailing text/comments syntax errors)
+  const extracted = extractFirstJson(text);
+  if (extracted) {
+    try {
+      return JSON.parse(extracted.replace(/,\s*([}\]])/g, '$1'));
+    } catch {}
+  }
+
+  // 4. Fallback lenient non-greedy match
+  const match = text.match(/(\{[\s\S]*?\}|\[[\s\S]*?\])/);
+  if (match) {
+    try {
+      return JSON.parse(match[0].replace(/,\s*([}\]])/g, '$1'));
+    } catch {}
+  }
+
+  return fallback;
 }
 
-// Universal robust generateContent with multi-model fallback and timeout
+function isTransientError(err: any): boolean {
+  if (!err) return false;
+  const status = err.status || err.statusCode || err.code;
+  if (status === 503 || status === 429 || status === 500) return true;
+  const msg = String(err.message || '');
+  return (
+    msg.includes('503') ||
+    msg.includes('429') ||
+    msg.includes('high demand') ||
+    msg.includes('UNAVAILABLE') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('ECONNRESET') ||
+    msg.includes('ETIMEDOUT') ||
+    msg.includes('초과')
+  );
+}
+
+// Universal robust generateContent with multi-model fallback, retry backoff and timeout
 async function generateContentWithFallback(
   contents: string,
   config?: any
@@ -79,36 +174,48 @@ async function generateContentWithFallback(
   let lastError: any = null;
 
   for (const model of CANDIDATE_MODELS) {
-    try {
-      console.log(`[Gemini] Trying model: ${model}`);
-      const startTime = Date.now();
-      const response = await Promise.race([
-        ai.models.generateContent({
-          model,
-          contents,
-          config: {
-            ...config,
-            responseMimeType: config?.responseMimeType || 'application/json'
-          }
-        }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`모델 ${model} 응답 시간 초과(25초)`)), 25000)
-        )
-      ]);
-      console.log(`[Gemini] Model ${model} responded in ${Date.now() - startTime}ms`);
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        console.log(`[Gemini] Trying model: ${model} (attempt ${attempt}/${maxAttempts})`);
+        const startTime = Date.now();
+        const response = await Promise.race([
+          ai.models.generateContent({
+            model,
+            contents,
+            config: {
+              ...config,
+              responseMimeType: config?.responseMimeType || 'application/json'
+            }
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`모델 ${model} 응답 시간 초과(20초)`)), 20000)
+          )
+        ]);
+        console.log(`[Gemini] Model ${model} responded in ${Date.now() - startTime}ms`);
 
-      const extractedText = (
-        response?.text ||
-        (response as any)?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') ||
-        ''
-      ).trim();
+        const extractedText = (
+          response?.text ||
+          (response as any)?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') ||
+          ''
+        ).trim();
 
-      if (extractedText) {
-        return { text: extractedText, model };
+        if (extractedText) {
+          return { text: extractedText, model };
+        }
+      } catch (err: any) {
+        lastError = err;
+        const transient = isTransientError(err);
+        const errMsg = err?.status || err?.message || String(err);
+        console.warn(`[Gemini] Model ${model} attempt ${attempt} failed (${errMsg})`);
+
+        if (attempt < maxAttempts && transient) {
+          console.log(`[Gemini] Transient error on ${model}, waiting 800ms before retry...`);
+          await sleep(800);
+          continue;
+        }
+        break;
       }
-    } catch (err: any) {
-      console.warn(`[Gemini] Model ${model} failed (${err?.status || err?.message}), trying next fallback...`);
-      lastError = err;
     }
   }
 

@@ -418,6 +418,14 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onClose }) =
       // 2. Gemini test (Real Server call)
       const geminiRes = await testGeminiConnection();
       setGeminiTestResult(geminiRes);
+    } catch (err: any) {
+      console.error('System test execution error:', err);
+      setGeminiTestResult({
+        success: false,
+        message: '테스트 실행 중 예기치 못한 오류가 발생했습니다.',
+        error: String(err?.message || err),
+        latencyMs: 0
+      });
     } finally {
       setTestingConnection(false);
     }
@@ -967,9 +975,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onClose }) =
                 </p>
               </div>
               <button
+                type="button"
                 onClick={handleRunSystemTests}
                 disabled={testingConnection}
-                className="px-5 py-2.5 bg-[#5A8F7B] hover:bg-[#4D7D6B] text-white rounded-xl text-xs font-extrabold flex items-center gap-2 shadow-xs disabled:opacity-50 transition-colors"
+                className="px-5 py-2.5 bg-[#5A8F7B] hover:bg-[#4D7D6B] text-white rounded-xl text-xs font-extrabold flex items-center gap-2 shadow-xs disabled:opacity-50 transition-colors cursor-pointer"
               >
                 <RefreshCw className={`w-4 h-4 ${testingConnection ? 'animate-spin' : ''}`} />
                 <span>{testingConnection ? '실제 연결 테스트 진행 중...' : '전체 시스템 실시간 테스트 실행'}</span>
@@ -992,7 +1001,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onClose }) =
                 </div>
                 <p className="text-xs text-[#4A443F] leading-relaxed">
                   {firestoreTestResult
-                    ? firestoreTestResult.message
+                    ? String(firestoreTestResult.message || '테스트 완료')
                     : '테스트 실행 전입니다. [실시간 테스트 실행] 버튼을 눌러주세요.'}
                 </p>
                 {firestoreTestResult?.details && (
@@ -1025,11 +1034,19 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onClose }) =
                         try {
                           const res = await testGeminiConnection();
                           setGeminiTestResult(res);
+                        } catch (err: any) {
+                          console.error('Gemini standalone test error:', err);
+                          setGeminiTestResult({
+                            success: false,
+                            message: '테스트 중 오류가 발생했습니다.',
+                            error: String(err?.message || err),
+                            latencyMs: 0
+                          });
                         } finally {
                           setTestingGeminiOnly(false);
                         }
                       }}
-                      className="text-[11px] font-bold px-2.5 py-1 bg-[#A67C52] hover:bg-[#8D6841] text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1 shadow-2xs"
+                      className="text-[11px] font-bold px-2.5 py-1 bg-[#A67C52] hover:bg-[#8D6841] text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1 shadow-2xs cursor-pointer"
                     >
                       <RefreshCw className={`w-3 h-3 ${testingGeminiOnly ? 'animate-spin' : ''}`} />
                       <span>{testingGeminiOnly ? '테스트 중...' : geminiTestResult ? '재검증' : 'AI 단독 테스트'}</span>
@@ -1038,12 +1055,12 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ onClose }) =
                 </div>
                 <p className="text-xs text-[#4A443F] leading-relaxed">
                   {geminiTestResult
-                    ? `${geminiTestResult.message}${geminiTestResult.model ? ` (${geminiTestResult.model})` : ''}`
+                    ? `${String(geminiTestResult.message || '')}${geminiTestResult.model ? ` (${geminiTestResult.model})` : ''}`
                     : '테스트 실행 전입니다. [AI 단독 테스트] 또는 상단 [전체 시스템 실시간 테스트 실행] 버튼을 눌러주세요.'}
                 </p>
                 {geminiTestResult && !geminiTestResult.success && geminiTestResult.error && (
-                  <p className="text-[11px] text-rose-600 font-mono bg-rose-50 p-2 rounded-lg border border-rose-200">
-                    오류 상세: {geminiTestResult.error}
+                  <p className="text-[11px] text-rose-600 font-mono bg-rose-50 p-2 rounded-lg border border-rose-200 break-all">
+                    오류 상세: {typeof geminiTestResult.error === 'string' ? geminiTestResult.error : JSON.stringify(geminiTestResult.error)}
                   </p>
                 )}
               </div>

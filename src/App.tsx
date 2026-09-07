@@ -32,6 +32,7 @@ import { WritingWizard } from './components/WritingWorkflow/WritingWizard';
 import { TeacherDashboard } from './components/TeacherDashboard/TeacherDashboard';
 import { BookMakerModal } from './components/BookMakerModal';
 import { WritingProcessViewerModal } from './components/WritingProcessViewerModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 export default function App() {
   // Authentication states
@@ -232,7 +233,8 @@ export default function App() {
 
       {/* Main App Content */}
       <main className="flex-1">
-        {/* VIEW 1: Teacher Dashboard */}
+        <ErrorBoundary onReset={() => setView(isTeacherLoggedIn ? 'teacher' : 'home')}>
+          {/* VIEW 1: Teacher Dashboard */}
         {isTeacherLoggedIn ? (
           <TeacherDashboard onClose={() => setView('home')} />
         ) : currentStudent ? (
@@ -384,6 +386,7 @@ export default function App() {
             </div>
           </div>
         )}
+        </ErrorBoundary>
       </main>
 
       {/* Footer */}

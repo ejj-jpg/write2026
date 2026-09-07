@@ -69,44 +69,41 @@ export const PRESET_TOPICS: DailyTopic[] = [
 
 export async function testGeminiConnection(): Promise<GeminiTestResult> {
   const startTime = performance.now();
+  const getLatency = () => Math.round(performance.now() - startTime);
 
-  // 1. First try GET /api/gemini/test (Simple request: no CORS preflight, sends cookies directly)
+  // 1. First try GET /api/gemini/test
   try {
     const res = await fetch(`/api/gemini/test?_t=${Date.now()}`, {
       method: 'GET',
-      credentials: 'include',
       headers: {
         'Accept': 'application/json'
       }
     });
 
-    const latencyMs = Math.round(performance.now() - startTime);
+    const latencyMs = getLatency();
     const contentType = res.headers.get('content-type') || '';
 
     if (contentType.includes('application/json')) {
       const data = await res.json();
-      if (res.ok && data.success) {
+      if (res.ok && data?.success) {
         return {
           success: true,
-          message: data.message || 'Gemini AI 연결이 정상 작동 중입니다.',
-          model: data.model || 'gemini-3.1-flash-lite',
+          message: typeof data.message === 'string' ? data.message : 'Gemini AI 연결이 정상 작동 중입니다.',
+          model: typeof data.model === 'string' ? data.model : 'gemini-3.1-flash-lite',
           latencyMs
         };
       }
-      if (!res.ok) {
-        return {
-          success: false,
-          message: data.error || `서버 응답 오류 (${res.status})`,
-          error: data.error,
-          latencyMs
-        };
-      }
-    } else if (contentType.includes('text/html')) {
-      // Intercepted by proxy or auth check
       return {
         success: false,
-        message: '브라우저 보안 세션 갱신이 필요합니다. 브라우저 페이지를 새로고침(F5) 후 다시 시도해 주세요.',
-        error: 'Proxy HTML Response (302/Cookie Check)',
+        message: extractCleanErrorMessage(data, `서버 응답 오류 (${res.status})`),
+        error: extractCleanErrorMessage(data?.error || data, `HTTP_${res.status}`),
+        latencyMs
+      };
+    } else if (contentType.includes('text/html')) {
+      return {
+        success: false,
+        message: '서버 인증 또는 세션 갱신이 필요합니다. 브라우저를 새로고침(F5) 후 다시 시도해 주세요.',
+        error: 'Proxy HTML Response (302/Auth Check)',
         latencyMs
       };
     }
@@ -118,7 +115,6 @@ export async function testGeminiConnection(): Promise<GeminiTestResult> {
   try {
     const res = await fetch(`/api/gemini/test?_t=${Date.now()}`, {
       method: 'POST',
-      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
@@ -126,23 +122,23 @@ export async function testGeminiConnection(): Promise<GeminiTestResult> {
       body: JSON.stringify({ ping: true, timestamp: Date.now() })
     });
 
-    const latencyMs = Math.round(performance.now() - startTime);
+    const latencyMs = getLatency();
     const contentType = res.headers.get('content-type') || '';
 
     if (contentType.includes('application/json')) {
       const data = await res.json();
-      if (res.ok && data.success) {
+      if (res.ok && data?.success) {
         return {
           success: true,
-          message: data.message || 'Gemini AI 연결이 정상 작동 중입니다.',
-          model: data.model || 'gemini-3.1-flash-lite',
+          message: typeof data.message === 'string' ? data.message : 'Gemini AI 연결이 정상 작동 중입니다.',
+          model: typeof data.model === 'string' ? data.model : 'gemini-3.1-flash-lite',
           latencyMs
         };
       }
       return {
         success: false,
-        message: data.error || `서버 응답 오류 (${res.status})`,
-        error: data.error,
+        message: extractCleanErrorMessage(data, `서버 응답 오류 (${res.status})`),
+        error: extractCleanErrorMessage(data?.error || data, `HTTP_${res.status}`),
         latencyMs
       };
     }
@@ -154,13 +150,12 @@ export async function testGeminiConnection(): Promise<GeminiTestResult> {
   try {
     const healthRes = await fetch(`/api/health?_t=${Date.now()}`, {
       method: 'GET',
-      credentials: 'include',
       headers: {
         'Accept': 'application/json'
       }
     });
 
-    const latencyMs = Math.round(performance.now() - startTime);
+    const latencyMs = getLatency();
     const contentType = healthRes.headers.get('content-type') || '';
 
     if (contentType.includes('application/json') && healthRes.ok) {
@@ -184,12 +179,11 @@ export async function testGeminiConnection(): Promise<GeminiTestResult> {
     console.warn('Health probe error:', healthErr);
   }
 
-  const latencyMs = Math.round(performance.now() - startTime);
   return {
     success: false,
     message: '서버 연결 확인 중입니다. 브라우저 페이지를 새로고침(F5)하거나 잠시 후 다시 테스트해주세요.',
     error: 'NETWORK_OR_PROXY_INTERCEPTION',
-    latencyMs
+    latencyMs: getLatency()
   };
 }
 

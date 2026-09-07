@@ -99,7 +99,7 @@ export function calculateLevel(xp: number): LevelInfo {
 }
 
 export function checkNewBadges(records: WritingRecord[], growth: StudentGrowth): Badge[] {
-  const existingIds = new Set(growth.badges.map(b => b.id));
+  const existingIds = new Set((growth.badges || []).map(b => (typeof b === 'string' ? b : b?.id)));
   const newBadges: Badge[] = [];
 
   for (const def of BADGE_DEFINITIONS) {

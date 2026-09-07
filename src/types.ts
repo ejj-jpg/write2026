@@ -135,16 +135,17 @@ export interface Badge {
 }
 
 export interface StudentGrowth {
-  id: string; // studentKey
+  id?: string; // studentKey
   studentKey: string;
+  studentName?: string;
   xp: number;
   level: number;
-  levelTitle: string;
+  levelTitle?: string;
   completedCount: number;
-  badges: Badge[];
-  equippedAvatar: string;
-  unlockedAvatars: string[];
-  equippedBadge: string;
+  badges?: (Badge | string)[];
+  equippedAvatar?: string;
+  unlockedAvatars?: string[];
+  equippedBadge?: string;
   updatedAt: number;
 }
 

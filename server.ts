@@ -19,9 +19,15 @@ app.use(express.json({ limit: '10mb' }));
 
 // Global CORS, Preflight, and Cache-Control handling
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
@@ -285,9 +291,24 @@ app.all(['/api/gemini/test', '/api/gemini/test/', '/gemini/test'], async (req, r
     });
   } catch (err: any) {
     console.error('Gemini test error:', err);
+    let errMsg = 'Gemini API 호출에 실패했습니다.';
+    if (typeof err?.message === 'string') {
+      try {
+        const parsed = JSON.parse(err.message);
+        if (parsed?.error?.message) {
+          errMsg = parsed.error.message;
+        } else {
+          errMsg = err.message;
+        }
+      } catch {
+        errMsg = err.message;
+      }
+    } else if (err?.error?.message) {
+      errMsg = err.error.message;
+    }
     res.status(500).json({
       success: false,
-      error: err.message || 'Gemini API 호출에 실패했습니다.'
+      error: errMsg
     });
   }
 });

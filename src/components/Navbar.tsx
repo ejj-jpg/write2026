@@ -5,38 +5,45 @@ import { formatStudentName } from '../lib/crypto';
 
 interface NavbarProps {
   currentStudent: Student | null;
-  studentGrowth: StudentGrowth | null;
+  studentGrowth?: StudentGrowth | null;
+  growth?: StudentGrowth | null;
   isTeacherLoggedIn: boolean;
-  nameDisplayMode: 'full' | 'masked' | 'numOnly';
+  nameDisplayMode?: 'full' | 'masked' | 'numOnly';
   onOpenStudentLogin: () => void;
   onOpenTeacherLogin: () => void;
   onLogout: () => void;
-  onGoHome: () => void;
-  onOpenBookshelf: () => void;
-  activeView: 'home' | 'writing' | 'my-writings' | 'books' | 'teacher';
-  setActiveView: (view: 'home' | 'writing' | 'my-writings' | 'books' | 'teacher') => void;
+  onGoHome?: () => void;
+  onNavigateHome?: () => void;
+  onOpenBookshelf?: () => void;
+  onOpenBookMaker?: () => void;
+  activeView?: 'home' | 'writing' | 'my-writings' | 'books' | 'teacher';
+  setActiveView?: (view: 'home' | 'writing' | 'my-writings' | 'books' | 'teacher') => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   currentStudent,
   studentGrowth,
+  growth,
   isTeacherLoggedIn,
-  nameDisplayMode,
+  nameDisplayMode = 'full',
   onOpenStudentLogin,
   onOpenTeacherLogin,
   onLogout,
   onGoHome,
+  onNavigateHome,
   onOpenBookshelf,
+  onOpenBookMaker,
   activeView,
   setActiveView
 }) => {
+  const handleHomeClick = onGoHome || onNavigateHome || (() => {});
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-[#EADDCA] shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         {/* Logo & Brand */}
         <div
           id="app-logo-btn"
-          onClick={onGoHome}
+          onClick={handleHomeClick}
           className="flex items-center gap-2.5 cursor-pointer select-none group"
         >
           <div className="w-10 h-10 rounded-xl bg-[#5A8F7B] flex items-center justify-center text-white shadow-sm group-hover:bg-[#4D7D6B] transition-colors">
